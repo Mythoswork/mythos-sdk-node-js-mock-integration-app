@@ -11,6 +11,11 @@ interface MythosSession {
   sessionJti: string;
 }
 
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
 
 // Fake standalone SaaS credentials — this is a demo gate only, not real auth.
@@ -40,6 +45,15 @@ export default function Calculator() {
   const [calcError, setCalcError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatCreditsTotal, setChatCreditsTotal] = useState(0);
+  const [lastMythosCost, setLastMythosCost] = useState<{
+    microunits: string | null;
+    source: string | null;
+  } | null>(null);
+  const [isChatSubmitting, setIsChatSubmitting] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!lt || verifyStarted.current) return;
@@ -89,6 +103,41 @@ export default function Calculator() {
     } finally {
       setIsSubmitting(false);
       setPendingLabel(null);
+    }
+  }
+
+  async function handleSendChatMessage() {
+    const message = chatInput.trim();
+    if (!lt || !session || !message || isChatSubmitting) return;
+
+    setChatError(null);
+    setIsChatSubmitting(true);
+    try {
+      setChatMessages((previous) => [...previous, { role: 'user', content: message }]);
+      setChatInput('');
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lt, message }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) {
+        setChatError(body.error ?? 'Chat request failed');
+        return;
+      }
+
+      setChatMessages((previous) => [...previous, { role: 'assistant', content: body.data.reply ?? '' }]);
+       if (typeof body.data.creditsCharged === 'number') {
+         setChatCreditsTotal((previous) => previous + body.data.creditsCharged);
+       }
+      setLastMythosCost({
+        microunits: body.data.mythosCostMicrounits ?? null,
+        source: body.data.mythosPricingSource ?? null,
+      });
+    } catch {
+      setChatError('Chat request failed.');
+    } finally {
+      setIsChatSubmitting(false);
     }
   }
 
@@ -221,6 +270,59 @@ export default function Calculator() {
       </div>
 
       {result !== null && <p>Result: {result}</p>}
+
+      <section style={{ marginTop: '2rem', borderTop: '1px solid #ddd', paddingTop: '1rem' }}>
+        <h2>LLM Chat</h2>
+         <p>Charged from observed provider cost, creator margin, and the Mythos platform fee.</p>
+        <div
+          style={{
+            border: '1px solid #ddd',
+            borderRadius: 4,
+            minHeight: 120,
+            maxHeight: 240,
+            overflowY: 'auto',
+            padding: '0.75rem',
+          }}
+        >
+          {chatMessages.length === 0 ? (
+            <p style={{ color: '#666' }}>No messages yet.</p>
+          ) : (
+            chatMessages.map((chatMessage, index) => (
+              <p key={`${chatMessage.role}-${index}`}>
+                <strong>{chatMessage.role === 'user' ? 'You' : 'Assistant'}:</strong> {chatMessage.content}
+              </p>
+            ))
+          )}
+        </div>
+
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSendChatMessage();
+          }}
+          style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}
+        >
+          <input
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+             placeholder="Ask something..."
+             disabled={isChatSubmitting}
+            style={{ flex: 1 }}
+          />
+           <button type="submit" disabled={isChatSubmitting || !chatInput.trim()}>
+            {isChatSubmitting ? 'Sending...' : 'Send'}
+          </button>
+        </form>
+
+        {chatError && <p style={{ color: 'red' }}>{chatError}</p>}
+        <p>Chat credits charged: {chatCreditsTotal}</p>
+        {lastMythosCost && (
+          <p>
+            Real Mythos cost: {lastMythosCost.microunits ?? 'unavailable'} microunits
+            {lastMythosCost.source ? ` (${lastMythosCost.source})` : ''}
+          </p>
+        )}
+      </section>
     </main>
   );
 }

@@ -21,6 +21,7 @@ async function main() {
     status: 'published',
     cover_image: 'https://example.com/calculator-cover.png',
     price_credits: 1,
+    producer_margin_pct: 100,
   });
 
   console.log(`Listing created: ${listing.listing_id}`);
