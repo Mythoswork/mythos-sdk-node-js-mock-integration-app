@@ -1,0 +1,16 @@
+diff --git a/dist/version.js b/dist/version.js
+index 13b2065191b9773674db2941136ac7277da4e15c..f5461a4f7b29321201aa2779f69a0baa8346a36c 100644
+--- a/dist/version.js
++++ b/dist/version.js
+@@ -1,6 +1,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+-exports.SDK_VERSION = void 0;
+-const module_1 = require("module");
+-const nodeRequire = (0, module_1.createRequire)(__filename);
+-exports.SDK_VERSION = nodeRequire('../package.json').version;
++// Patched: the original dynamic `createRequire(...).require('../package.json')`
++// isn't resolvable by Next.js's build-time page-data collection even though the
++// file exists on disk at runtime, which breaks `next build` for any route that
++// imports @mythos-work/sdk. Hardcoding avoids the dynamic require entirely.
++exports.SDK_VERSION = "0.0.7";

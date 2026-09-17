@@ -1,0 +1,6 @@
+allowBuilds:
+  better-sqlite3: true
+  sharp: false
+  unrs-resolver: false
+patchedDependencies:
+  '@mythos-work/sdk@0.0.7': patches/@mythos-work__sdk@0.0.7.patch

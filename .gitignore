@@ -31,14 +31,16 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env.local
+.env*
+!.env.example
 
 # vercel
 .vercel
 
-# local test state
-/data/listing-ids.json
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# sqlite
+/data/*.db
+/data/*.db-journal

@@ -1,31 +1,38 @@
 {
-  "name": "mythos-calculator-mockup",
+  "name": "nextjs-integration",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "test": "tsx --test lib/**/*.test.ts",
-    "bootstrap": "tsx scripts/bootstrap.ts"
+    "lint": "eslint"
   },
   "dependencies": {
-    "@mythos-work/sdk": "0.0.7",
-    "@upstash/redis": "^1.38.0",
-    "express": "^4.19.2",
-    "next": "16.2.10",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "@mythos-work/sdk": "^0.0.7",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "express": "^4.22.3",
+    "jose": "^5.10.0",
+    "next": "16.3.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
+    "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^3.0.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.10",
-    "tsx": "^4.19.0",
+    "eslint-config-next": "16.3.5",
+    "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "packageManager": "pnpm@12.4.2",
+  "patchedDependencies": {
+    "@mythos-work/sdk@0.0.7": "patches/@mythos-work__sdk@0.0.7.patch"
   }
 }
