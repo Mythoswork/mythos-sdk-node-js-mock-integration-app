@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { confirmCharge } from '@/lib/confirm-charge';
+import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
 import { CREDITS_PER_CALCULATION } from '@/lib/pricing';
 
 interface MythosSession {
@@ -9,11 +9,6 @@ interface MythosSession {
   displayName: string;
   listingId: string;
   sessionJti: string;
-}
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
 }
 
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
@@ -45,35 +40,36 @@ export default function Calculator() {
   const [calcError, setCalcError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatCreditsTotal, setChatCreditsTotal] = useState(0);
-  const [lastMythosCost, setLastMythosCost] = useState<{
-    microunits: string | null;
-    source: string | null;
-  } | null>(null);
-  const [isChatSubmitting, setIsChatSubmitting] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!lt || verifyStarted.current) return;
+    // router.isReady guards against Next's Pages Router not having parsed the query
+    // string yet on first render -- without this, the very first verify attempt can fire
+    // with `lt` still undefined even though it's right there in the URL, and since
+    // verifyStarted latches immediately, that bad attempt is never retried.
+    if (!router.isReady || verifyStarted.current) return;
     verifyStarted.current = true;
 
-    fetch(`/api/verify-session?lt=${encodeURIComponent(lt)}`)
+    // No `lt` is fine here -- the session cookie from an earlier page (e.g. /llm) already
+    // covers it; /api/verify-session checks that cookie before ever needing `lt`.
+    const url = lt ? `/api/verify-session?lt=${encodeURIComponent(lt)}` : '/api/verify-session';
+    fetch(url)
       .then((res) => res.json())
       .then((body) => {
         if (body.success) {
           setSession(body.data);
-          window.parent.postMessage({ type: 'mythos:handshake' }, '*');
+          sendHandshake();
         } else {
           setSessionError(body.error ?? 'Session verification failed');
         }
       })
       .catch((err) => setSessionError(String(err)));
-  }, [lt]);
+  }, [lt, router.isReady]);
 
   async function handleCalculate() {
-    if (!lt) return;
+    if (!lt) {
+      setCalcError('Missing launch token in the URL -- reopen this app from Mythos to calculate.');
+      return;
+    }
     setCalcError(null);
     setIsSubmitting(true);
 
@@ -106,41 +102,6 @@ export default function Calculator() {
     }
   }
 
-  async function handleSendChatMessage() {
-    const message = chatInput.trim();
-    if (!lt || !session || !message || isChatSubmitting) return;
-
-    setChatError(null);
-    setIsChatSubmitting(true);
-    try {
-      setChatMessages((previous) => [...previous, { role: 'user', content: message }]);
-      setChatInput('');
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lt, message }),
-      });
-      const body = await response.json();
-      if (!response.ok || !body.success) {
-        setChatError(body.error ?? 'Chat request failed');
-        return;
-      }
-
-      setChatMessages((previous) => [...previous, { role: 'assistant', content: body.data.reply ?? '' }]);
-       if (typeof body.data.creditsCharged === 'number') {
-         setChatCreditsTotal((previous) => previous + body.data.creditsCharged);
-       }
-      setLastMythosCost({
-        microunits: body.data.mythosCostMicrounits ?? null,
-        source: body.data.mythosPricingSource ?? null,
-      });
-    } catch {
-      setChatError('Chat request failed.');
-    } finally {
-      setIsChatSubmitting(false);
-    }
-  }
-
   function handleStandaloneLogin() {
     setStandaloneLoginError(null);
     if (standaloneUsername === STANDALONE_USERNAME && standalonePassword === STANDALONE_PASSWORD) {
@@ -169,10 +130,11 @@ export default function Calculator() {
     setResult(value);
   }
 
-  // No `lt` at all: this is direct/independent access, not via Mythos.
-  // The SDK never runs here, so this app's own auth + paywall gate the feature —
-  // there is nothing for Mythos to bypass, because Mythos was never involved.
-  if (!lt) {
+  // Standalone (no Mythos at all): only once verify-session has actually been tried and
+  // found nothing -- no `lt`, and no session cookie from another page either. The SDK
+  // never runs here, so this app's own auth + paywall gate the feature; there is nothing
+  // for Mythos to bypass, because Mythos was never involved.
+  if (!lt && !session && sessionError) {
     if (!isStandaloneLoggedIn) {
       return (
         <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
@@ -248,6 +210,9 @@ export default function Calculator() {
         Welcome, {session.displayName} ({session.email})
       </p>
       <p>Credits charged this session: {creditsChargedTotal}</p>
+      <p>
+        <a href={lt ? `/llm?lt=${encodeURIComponent(lt)}` : '/llm'}>Try LLM Chat →</a>
+      </p>
 
       {calcError && <p style={{ color: 'red' }}>{calcError}</p>}
 
@@ -270,59 +235,6 @@ export default function Calculator() {
       </div>
 
       {result !== null && <p>Result: {result}</p>}
-
-      <section style={{ marginTop: '2rem', borderTop: '1px solid #ddd', paddingTop: '1rem' }}>
-        <h2>LLM Chat</h2>
-         <p>Charged from observed provider cost, creator margin, and the Mythos platform fee.</p>
-        <div
-          style={{
-            border: '1px solid #ddd',
-            borderRadius: 4,
-            minHeight: 120,
-            maxHeight: 240,
-            overflowY: 'auto',
-            padding: '0.75rem',
-          }}
-        >
-          {chatMessages.length === 0 ? (
-            <p style={{ color: '#666' }}>No messages yet.</p>
-          ) : (
-            chatMessages.map((chatMessage, index) => (
-              <p key={`${chatMessage.role}-${index}`}>
-                <strong>{chatMessage.role === 'user' ? 'You' : 'Assistant'}:</strong> {chatMessage.content}
-              </p>
-            ))
-          )}
-        </div>
-
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleSendChatMessage();
-          }}
-          style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}
-        >
-          <input
-            value={chatInput}
-            onChange={(event) => setChatInput(event.target.value)}
-             placeholder="Ask something..."
-             disabled={isChatSubmitting}
-            style={{ flex: 1 }}
-          />
-           <button type="submit" disabled={isChatSubmitting || !chatInput.trim()}>
-            {isChatSubmitting ? 'Sending...' : 'Send'}
-          </button>
-        </form>
-
-        {chatError && <p style={{ color: 'red' }}>{chatError}</p>}
-        <p>Chat credits charged: {chatCreditsTotal}</p>
-        {lastMythosCost && (
-          <p>
-            Real Mythos cost: {lastMythosCost.microunits ?? 'unavailable'} microunits
-            {lastMythosCost.source ? ` (${lastMythosCost.source})` : ''}
-          </p>
-        )}
-      </section>
     </main>
   );
 }

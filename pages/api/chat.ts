@@ -1,18 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import {
-  getLlmBillingMetadata,
-  InvalidLaunchTokenError,
-  llm,
-  MythosConfigError,
-  MythosError,
-  verifyLaunchToken,
-} from '@mythos-work/sdk';
+import OpenAI from 'openai';
+import { decodeSession, getLlmBillingMetadata, llm, MythosError } from '@mythos-work/sdk';
 
-import { getListingIds } from '../../lib/listing-ids-store';
-import { getMythosSession } from '../../lib/mythos-session-store';
+import { SESSION_COOKIE_NAME } from '../../lib/session-cookie';
 
 const PRODUCER_OPENAI_API_KEY = process.env.PRODUCER_OPENAI_API_KEY;
 const MODEL_ID = process.env.ALPHA_MODEL_ID ?? 'openai/gpt-4o-mini';
+const STANDALONE_MODEL_ID = MODEL_ID.replace(/^openrouter\//, '');
+const STANDALONE_BASE_URL = 'https://openrouter.ai/api/v1';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -25,11 +20,10 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
   }
 
   const body = isRecord(req.body) ? req.body : {};
-  const launchToken = typeof body['lt'] === 'string' ? body['lt'] : '';
   const message = typeof body['message'] === 'string' ? body['message'].trim() : '';
 
-  if (!launchToken || !message) {
-    res.status(400).json({ success: false, error: 'Missing lt or message' });
+  if (!message) {
+    res.status(400).json({ success: false, error: 'Missing message' });
     return;
   }
   if (!PRODUCER_OPENAI_API_KEY) {
@@ -37,21 +31,26 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
     return;
   }
 
-  try {
-    const verifiedSession = await verifyLaunchToken(launchToken, { resolveListingIds: getListingIds });
-    const session = getMythosSession(launchToken);
-    if (!session || session.sessionJti !== verifiedSession.sessionJti) {
-      res.status(401).json({ success: false, error: 'Mythos session is not initialized' });
-      return;
-    }
+  // One endpoint either way, same as /api/calculate: with a Mythos session (from the
+  // cookie /api/verify-session set), llm()'s returned client is routed through the Mythos
+  // gateway and billed. Without one -- this app's own standalone demo mode -- llm()'s
+  // fallback returns a plain OpenAI client instead. Only the model id and billing
+  // metadata differ; the client never needs to know or choose which mode it's in.
+  const cookieValue = req.cookies[SESSION_COOKIE_NAME];
+  const session = cookieValue ? decodeSession(cookieValue) : null;
+  const isStandalone = !session;
 
-    const client = llm(session, { apiKey: PRODUCER_OPENAI_API_KEY });
+  try {
+    const client = llm<OpenAI>(session, {
+      apiKey: PRODUCER_OPENAI_API_KEY,
+      fallback: new OpenAI({ apiKey: PRODUCER_OPENAI_API_KEY, baseURL: STANDALONE_BASE_URL }),
+    });
     const completion = await client.chat.completions.create({
-      model: MODEL_ID,
+      model: isStandalone ? STANDALONE_MODEL_ID : MODEL_ID,
       messages: [{ role: 'user', content: message }],
       stream: false,
     });
-    const billing = getLlmBillingMetadata(completion);
+    const billing = isStandalone ? null : getLlmBillingMetadata(completion);
 
     res.status(200).json({
       success: true,
@@ -64,11 +63,7 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
       },
     });
   } catch (err: unknown) {
-    if (err instanceof InvalidLaunchTokenError) {
-      res.status(401).json({ success: false, error: 'Invalid launch token' });
-      return;
-    }
-    if (err instanceof MythosConfigError || err instanceof MythosError) {
+    if (err instanceof MythosError) {
       res.status(500).json({ success: false, error: 'Chat service is misconfigured' });
       return;
     }
