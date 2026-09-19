@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import Head from 'next/head';
 import type { MythosSession } from '@mythos-work/sdk';
 import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
 import { estimateChatCredits } from '@/lib/pricing';
@@ -137,49 +138,53 @@ export default function LlmPage() {
   function renderChatPanel() {
     return (
       <>
-        <div
-          style={{
-            border: '1px solid #ddd',
-            borderRadius: 4,
-            minHeight: 240,
-            maxHeight: 480,
-            overflowY: 'auto',
-            padding: '0.75rem',
-          }}
-        >
+        <div className="chatLog">
           {messages.length === 0 ? (
-            <p style={{ color: '#666' }}>No messages yet.</p>
+            <p className="chatEmpty">No messages yet.</p>
           ) : (
             messages.map((message, index) => (
-              <p key={`${message.role}-${index}`}>
-                <strong>{message.role === 'user' ? 'You' : 'Assistant'}:</strong> {message.content}
-              </p>
+              <div
+                key={`${message.role}-${index}`}
+                className={`chatBubble ${message.role === 'user' ? 'chatBubbleUser' : 'chatBubbleAssistant'}`}
+              >
+                {message.content}
+              </div>
             ))
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+        <div className="chatInputRow">
           <input
+            className="input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask something..."
             disabled={isSubmitting}
-            style={{ flex: 1 }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !isSubmitting && input.trim()) void handleSend();
+            }}
           />
-          <button onClick={() => void handleSend()} disabled={isSubmitting || !input.trim()}>
+          <button className="btn btnPrimary" onClick={() => void handleSend()} disabled={isSubmitting || !input.trim()}>
             {isSubmitting ? 'Sending...' : 'Send'}
           </button>
         </div>
 
-        {chatError && <p style={{ color: 'red' }}>{chatError}</p>}
+        {chatError && <p className="errorText">{chatError}</p>}
         {lastCost && (
-          <p>
-            Cost: {lastCost.credits ?? '?'} credit{lastCost.credits === 1 ? '' : 's'}
-            {lastCost.microunits ? ` (${lastCost.microunits} microunits` : ''}
-            {lastCost.source ? `, ${lastCost.source}` : ''}
-            {lastCost.microunits ? ')' : ''}
-            {lastCost.status ? ` - ${lastCost.status}` : ''}
-          </p>
+          <div className="ledger">
+            <div className="ledgerItem">
+              <span className="ledgerLabel">Credits charged</span>
+              <span className="ledgerValue">{lastCost.credits ?? '?'}</span>
+            </div>
+            <div className="ledgerItem">
+              <span className="ledgerLabel">Real cost</span>
+              <span className="ledgerValue">{lastCost.microunits ?? '—'} µu</span>
+            </div>
+            <div className="ledgerItem">
+              <span className="ledgerLabel">Status</span>
+              <span className="ledgerValue">{lastCost.status ?? '—'}</span>
+            </div>
+          </div>
         )}
       </>
     );
@@ -191,70 +196,151 @@ export default function LlmPage() {
   if (!lt && !session && sessionError) {
     if (!isStandaloneLoggedIn) {
       return (
-        <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
-          <h1>Standalone LLM Chat</h1>
-          <p>No Mythos session detected. Log in with this app&apos;s own account.</p>
-          {standaloneLoginError && <p style={{ color: 'red' }}>{standaloneLoginError}</p>}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxWidth: 240 }}>
-            <input
-              placeholder="username"
-              value={standaloneUsername}
-              onChange={(e) => setStandaloneUsername(e.target.value)}
-            />
-            <input
-              placeholder="password"
-              type="password"
-              value={standalonePassword}
-              onChange={(e) => setStandalonePassword(e.target.value)}
-            />
-            <button onClick={handleStandaloneLogin}>Log in</button>
-          </div>
-        </main>
+        <>
+          <Head>
+            <title>Mythos · LLM Chat (standalone)</title>
+          </Head>
+          <main className="shell llmShell">
+            <div className="brandStrip">
+              <span className="wordmark">LLM Chat</span>
+              <span className="modeLabel">Standalone</span>
+            </div>
+            <div className="panel authPanel">
+              <div className="eyebrow">Direct access</div>
+              <div className="identity">
+                <h1>Log in</h1>
+                <p>No Mythos session detected — use this app&apos;s own account.</p>
+              </div>
+              {standaloneLoginError && <p className="errorText">{standaloneLoginError}</p>}
+              <div className="field" style={{ marginTop: '1.25rem' }}>
+                <label htmlFor="su">Username</label>
+                <input
+                  id="su"
+                  className="input"
+                  value={standaloneUsername}
+                  onChange={(e) => setStandaloneUsername(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="sp">Password</label>
+                <input
+                  id="sp"
+                  className="input"
+                  type="password"
+                  value={standalonePassword}
+                  onChange={(e) => setStandalonePassword(e.target.value)}
+                />
+              </div>
+              <button className="btn btnPrimary" onClick={handleStandaloneLogin}>
+                Log in
+              </button>
+            </div>
+          </main>
+        </>
       );
     }
 
     if (!isStandalonePaid) {
       return (
-        <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
-          <h1>Subscribe to use LLM Chat</h1>
-          <p>This app&apos;s own paywall — not Mythos. $9.99/mo, fake checkout for this demo.</p>
-          <button onClick={() => setIsStandalonePaid(true)}>Subscribe</button>
-        </main>
+        <>
+          <Head>
+            <title>Mythos · LLM Chat (standalone)</title>
+          </Head>
+          <main className="shell llmShell">
+            <div className="brandStrip">
+              <span className="wordmark">LLM Chat</span>
+              <span className="modeLabel">Standalone</span>
+            </div>
+            <div className="panel authPanel">
+              <div className="eyebrow">Direct access</div>
+              <div className="identity">
+                <h1>Subscribe to continue</h1>
+                <p>This app&apos;s own paywall, not Mythos — $9.99/mo, fake checkout for this demo.</p>
+              </div>
+              <button className="btn btnPrimary" onClick={() => setIsStandalonePaid(true)} style={{ marginTop: '1.25rem' }}>
+                Subscribe
+              </button>
+            </div>
+          </main>
+        </>
       );
     }
 
     return (
-      <main style={{ fontFamily: 'sans-serif', maxWidth: 720, margin: '2rem auto', padding: '0 1rem' }}>
-        <h1>Standalone LLM Chat</h1>
-        <p>Logged in via this app&apos;s own account. No Mythos credits used — this operation never calls Mythos.</p>
-        {renderChatPanel()}
-      </main>
+      <>
+        <Head>
+          <title>Mythos · LLM Chat (standalone)</title>
+        </Head>
+        <main className="shell chatShell llmShell">
+          <div className="brandStrip">
+            <span className="wordmark">LLM Chat</span>
+            <span className="modeLabel">Standalone</span>
+          </div>
+            <div className="panel panelFeatured workspacePanel chatWorkspace">
+              <div className="panelTopline">
+                <div className="eyebrow">Private inference workspace</div>
+                <span className="statusPill"><span className="statusDot" /> Subscription active</span>
+              </div>
+              <div className="identity">
+              <h1>Standalone LLM chat</h1>
+              <p>Logged in via this app&apos;s own account — no Mythos credits used.</p>
+            </div>
+            <div className="chatBody">{renderChatPanel()}</div>
+          </div>
+        </main>
+      </>
     );
   }
 
   if (sessionError) {
     return (
-      <main style={{ fontFamily: 'sans-serif', padding: '2rem', color: 'red' }}>
-        Session error: {sessionError}
+      <main className="shell llmShell">
+        <p className="errorText">Session error: {sessionError}</p>
       </main>
     );
   }
 
   if (!session) {
-    return <main style={{ fontFamily: 'sans-serif', padding: '2rem' }}>Verifying session...</main>;
+    return (
+      <main className="shell llmShell">
+        <p className="helperText">Verifying session…</p>
+      </main>
+    );
   }
 
   return (
-    <main style={{ fontFamily: 'sans-serif', maxWidth: 720, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1>Mythos LLM Chat</h1>
-      <p>
-        Welcome, {session.displayName} ({session.email})
-      </p>
-      <p>Credits charged this session: {creditsChargedTotal}</p>
-      <p>
-        <a href={lt ? `/calculator?lt=${encodeURIComponent(lt)}` : '/calculator'}>← Calculator</a>
-      </p>
-      {renderChatPanel()}
-    </main>
+    <>
+      <Head>
+        <title>Mythos · LLM Chat</title>
+      </Head>
+      <main className="shell chatShell llmShell">
+        <div className="brandStrip">
+          <span className="wordmark">Mythos</span>
+          <span className="modeLabel">LLM Chat</span>
+        </div>
+
+        <div className="panel panelFeatured workspacePanel chatWorkspace">
+          <div className="panelTopline">
+            <div className="eyebrow">Mythos gateway</div>
+            <span className="statusPill"><span className="statusDot" /> Metered live</span>
+          </div>
+          <div className="identity">
+            <h1>Welcome, {session.displayName}</h1>
+            <p>{session.email}</p>
+          </div>
+
+          <div className="readout">
+            <div className="readoutLabel">Credits charged this session</div>
+            <div key={creditsChargedTotal} className="readoutValue flash">{creditsChargedTotal}</div>
+          </div>
+
+          <div className="chatBody">{renderChatPanel()}</div>
+        </div>
+
+        <a className="navLink" href={lt ? `/calculator?lt=${encodeURIComponent(lt)}` : '/calculator'}>
+          Open Calculator
+        </a>
+      </main>
+    </>
   );
 }

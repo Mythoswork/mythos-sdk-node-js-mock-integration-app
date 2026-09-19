@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import Head from 'next/head';
 
 interface WalletSummary {
   subscription: number;
@@ -80,53 +81,126 @@ export default function Harness() {
   }
 
   return (
-    <main style={{ fontFamily: 'sans-serif', maxWidth: 640, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1>Mythos Harness</h1>
+    <>
+      <Head>
+        <title>Mythos · Harness</title>
+      </Head>
+      <main className="shell shellLanding">
+        <div className="brandStrip">
+          <span className="wordmark">Mythos</span>
+          <div className="brandAside">
+            <span className="statusPill"><span className="statusDot" /> Local preview</span>
+            <span className="modeLabel">Producer console</span>
+          </div>
+        </div>
 
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-
-      <section style={{ marginBottom: '2rem' }}>
-        <h2>1. Login</h2>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" />
-        <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="password" type="password" />
-        <button onClick={handleLogin}>Login</button>
-        {token && <p>Logged in.</p>}
-      </section>
-
-      {wallet && (
-        <section style={{ marginBottom: '2rem' }}>
-          <h2>Wallet</h2>
-          <p>Subscription: {wallet.subscription} | Topup: {wallet.topup} | Total: {wallet.total}</p>
+        <section className="heroBand">
+          <div>
+            <div className="eyebrow">Mythos / integration preview</div>
+            <h1 className="heroTitle">Make a listing feel <span>alive.</span></h1>
+            <p className="heroCopy">
+              A polished producer console for launching experiences, watching wallet movement, and proving the
+              full marketplace loop in one place.
+            </p>
+          </div>
+          <div className="heroMeta">
+            <span className="metaChip">ES256 sessions</span>
+            <span className="metaChip">Usage metering</span>
+          </div>
         </section>
-      )}
 
-      <section style={{ marginBottom: '2rem' }}>
-        <h2>2. Launch</h2>
-        <button onClick={handleLaunch} disabled={!token}>
-          Launch Calculator
-        </button>
-        {launchResult && (
-          <p>
-            <a href={`/calculator?lt=${encodeURIComponent(launchResult.launch_token)}`} target="_blank" rel="noreferrer">
-              Open Calculator
-            </a>{' '}
-            (expires {launchResult.expires_at})
-          </p>
+        {error && <p className="errorText">{error}</p>}
+
+        <div className="panel panelFeatured">
+          <div className="panelTopline">
+            <div>
+              <div className="eyebrow">Launch flow</div>
+              <h2 className="panelHeading">Open a real consumer session</h2>
+            </div>
+            <span className="metaChip">2 steps</span>
+          </div>
+          <div className="stepRail">
+            <div className="step">
+              <div className={`stepMarker ${token ? 'stepDone' : ''}`}>{token ? '✓' : '1'}</div>
+              <div className="stepBody">
+                <div className="stepTitle">Log in</div>
+                <div className="field">
+                  <label htmlFor="email">Email</label>
+                  <input
+                    id="email"
+                    className="input"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="password">Password</label>
+                  <input
+                    id="password"
+                    className="input"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+                <button className="btn btnPrimary" onClick={handleLogin} disabled={!!token}>
+                  {token ? 'Logged in' : 'Log in'}
+                </button>
+              </div>
+            </div>
+
+            <div className="step">
+              <div className={`stepMarker ${launchResult ? 'stepDone' : ''}`}>{launchResult ? '✓' : '2'}</div>
+              <div className="stepBody">
+                <div className="stepTitle">Launch the Calculator listing</div>
+                <button className="btn btnPrimary" onClick={handleLaunch} disabled={!token}>
+                  Launch
+                </button>
+                {launchResult && (
+                  <p className="helperText" style={{ marginTop: '0.75rem' }}>
+                    <a className="navLink" href={`/calculator?lt=${encodeURIComponent(launchResult.launch_token)}`} target="_blank" rel="noreferrer" style={{ marginTop: 0 }}>
+                      Open Calculator
+                    </a>
+                    <br />
+                    expires {launchResult.expires_at}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {wallet && (
+          <div className="panel metricsPanel">
+            <div className="eyebrow">Wallet snapshot</div>
+            <div className="readoutLabel">Wallet balance</div>
+            <div className="readoutValue">{wallet.total}</div>
+            <div className="walletRow" style={{ marginTop: '1rem' }}>
+              <span className="ledgerLabel">Subscription credits</span>
+              <span className="ledgerValue">{wallet.subscription}</span>
+            </div>
+            <div className="walletRow">
+              <span className="ledgerLabel">Top-up credits</span>
+              <span className="ledgerValue">{wallet.topup}</span>
+            </div>
+          </div>
         )}
-      </section>
 
-      {history.length > 0 && (
-        <section>
-          <h2>Launch History</h2>
-          <ul>
+        {history.length > 0 && (
+          <div className="panel historyPanel">
+            <div className="eyebrow">Recent activity</div>
+            <div className="panelHeading">Launch history</div>
             {history.map((item) => (
-              <li key={item.listing_id}>
-                {item.title}: {item.launch_count} launches, {item.total_metered_credits_charged} credits charged
-              </li>
+              <div className="walletRow" key={item.listing_id}>
+                <span className="ledgerLabel">
+                  {item.title} · {item.launch_count} launch{item.launch_count === 1 ? '' : 'es'}
+                </span>
+                <span className="ledgerValue">{item.total_metered_credits_charged} credits</span>
+              </div>
             ))}
-          </ul>
-        </section>
-      )}
-    </main>
+          </div>
+        )}
+      </main>
+    </>
   );
 }

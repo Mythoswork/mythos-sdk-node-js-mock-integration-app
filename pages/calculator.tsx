@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import Head from 'next/head';
 import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
 import { CREDITS_PER_CALCULATION } from '@/lib/pricing';
 
@@ -12,6 +13,13 @@ interface MythosSession {
 }
 
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
+
+const OPERATION_SYMBOL: Record<Operation, string> = {
+  add: '+',
+  subtract: '−',
+  multiply: '×',
+  divide: '÷',
+};
 
 // Fake standalone SaaS credentials — this is a demo gate only, not real auth.
 const STANDALONE_USERNAME = 'demo';
@@ -49,8 +57,8 @@ export default function Calculator() {
     if (!router.isReady || verifyStarted.current) return;
     verifyStarted.current = true;
 
-    // No `lt` is fine here -- the session cookie from an earlier page (e.g. /llm) already
-    // covers it; /api/verify-session checks that cookie before ever needing `lt`.
+    // No `lt` is fine here -- an existing app session cookie can cover it;
+    // /api/verify-session checks that cookie before ever needing `lt`.
     const url = lt ? `/api/verify-session?lt=${encodeURIComponent(lt)}` : '/api/verify-session';
     fetch(url)
       .then((res) => res.json())
@@ -130,6 +138,42 @@ export default function Calculator() {
     setResult(value);
   }
 
+  function renderKeypad(onSubmit: () => void, submitLabel: string, disabled?: boolean) {
+    return (
+      <div className="calcRow">
+        <input
+          className="input"
+          type="number"
+          value={a}
+          onChange={(e) => setA(Number(e.target.value))}
+          disabled={disabled}
+        />
+        <select
+          className="input"
+          value={operation}
+          onChange={(e) => setOperation(e.target.value as Operation)}
+          disabled={disabled}
+        >
+          {(Object.keys(OPERATION_SYMBOL) as Operation[]).map((op) => (
+            <option key={op} value={op}>
+              {OPERATION_SYMBOL[op]}
+            </option>
+          ))}
+        </select>
+        <input
+          className="input"
+          type="number"
+          value={b}
+          onChange={(e) => setB(Number(e.target.value))}
+          disabled={disabled}
+        />
+        <button className="btn btnPrimary" onClick={onSubmit} disabled={disabled}>
+          {submitLabel}
+        </button>
+      </div>
+    );
+  }
+
   // Standalone (no Mythos at all): only once verify-session has actually been tried and
   // found nothing -- no `lt`, and no session cookie from another page either. The SDK
   // never runs here, so this app's own auth + paywall gate the feature; there is nothing
@@ -137,104 +181,161 @@ export default function Calculator() {
   if (!lt && !session && sessionError) {
     if (!isStandaloneLoggedIn) {
       return (
-        <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
-          <h1>Standalone Calculator</h1>
-          <p>No Mythos session detected. Log in with this app&apos;s own account.</p>
-          {standaloneLoginError && <p style={{ color: 'red' }}>{standaloneLoginError}</p>}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxWidth: 240 }}>
-            <input
-              placeholder="username"
-              value={standaloneUsername}
-              onChange={(e) => setStandaloneUsername(e.target.value)}
-            />
-            <input
-              placeholder="password"
-              type="password"
-              value={standalonePassword}
-              onChange={(e) => setStandalonePassword(e.target.value)}
-            />
-            <button onClick={handleStandaloneLogin}>Log in</button>
-          </div>
-        </main>
+        <>
+          <Head>
+            <title>Mythos · Calculator (standalone)</title>
+          </Head>
+          <main className="shell">
+            <div className="brandStrip">
+              <span className="wordmark">Calculator</span>
+              <span className="modeLabel">Standalone</span>
+            </div>
+            <div className="panel authPanel">
+              <div className="eyebrow">Direct access</div>
+              <div className="identity">
+                <h1>Log in</h1>
+                <p>No Mythos session detected — use this app&apos;s own account.</p>
+              </div>
+              {standaloneLoginError && <p className="errorText">{standaloneLoginError}</p>}
+              <div className="field" style={{ marginTop: '1.25rem' }}>
+                <label htmlFor="su">Username</label>
+                <input
+                  id="su"
+                  className="input"
+                  value={standaloneUsername}
+                  onChange={(e) => setStandaloneUsername(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="sp">Password</label>
+                <input
+                  id="sp"
+                  className="input"
+                  type="password"
+                  value={standalonePassword}
+                  onChange={(e) => setStandalonePassword(e.target.value)}
+                />
+              </div>
+              <button className="btn btnPrimary" onClick={handleStandaloneLogin}>
+                Log in
+              </button>
+            </div>
+          </main>
+        </>
       );
     }
 
     if (!isStandalonePaid) {
       return (
-        <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
-          <h1>Subscribe to use the calculator</h1>
-          <p>This app&apos;s own paywall — not Mythos. $9.99/mo, fake checkout for this demo.</p>
-          <button onClick={() => setIsStandalonePaid(true)}>Subscribe</button>
-        </main>
+        <>
+          <Head>
+            <title>Mythos · Calculator (standalone)</title>
+          </Head>
+          <main className="shell">
+            <div className="brandStrip">
+              <span className="wordmark">Calculator</span>
+              <span className="modeLabel">Standalone</span>
+            </div>
+            <div className="panel authPanel">
+              <div className="eyebrow">Direct access</div>
+              <div className="identity">
+                <h1>Subscribe to continue</h1>
+                <p>This app&apos;s own paywall, not Mythos — $9.99/mo, fake checkout for this demo.</p>
+              </div>
+              <button className="btn btnPrimary" onClick={() => setIsStandalonePaid(true)} style={{ marginTop: '1.25rem' }}>
+                Subscribe
+              </button>
+            </div>
+          </main>
+        </>
       );
     }
 
     return (
-      <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
-        <h1>Standalone Calculator</h1>
-        <p>Logged in via this app&apos;s own account. No Mythos credits used — this operation never calls Mythos.</p>
-
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem' }}>
-          <input type="number" value={a} onChange={(e) => setA(Number(e.target.value))} />
-          <select value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
-            <option value="add">+</option>
-            <option value="subtract">-</option>
-            <option value="multiply">*</option>
-            <option value="divide">/</option>
-          </select>
-          <input type="number" value={b} onChange={(e) => setB(Number(e.target.value))} />
-          <button onClick={standaloneCalculate}>=</button>
-        </div>
-
-        {result !== null && <p>Result: {result}</p>}
-      </main>
+      <>
+        <Head>
+          <title>Mythos · Calculator (standalone)</title>
+        </Head>
+        <main className="shell">
+          <div className="brandStrip">
+            <span className="wordmark">Calculator</span>
+            <span className="modeLabel">Standalone</span>
+          </div>
+          <div className="panel panelFeatured workspacePanel">
+            <div className="panelTopline">
+              <div className="eyebrow">Interactive listing</div>
+              <span className="statusPill"><span className="statusDot" /> Live session</span>
+            </div>
+            <div className="identity">
+              <h1>Standalone calculator</h1>
+              <p>Logged in via this app&apos;s own account — no Mythos credits used.</p>
+            </div>
+            <div style={{ marginTop: '1.5rem' }}>{renderKeypad(standaloneCalculate, '=')}</div>
+            {result !== null && (
+              <p className="calcResult">
+                Result: <strong>{result}</strong>
+              </p>
+            )}
+          </div>
+        </main>
+      </>
     );
   }
 
   if (sessionError) {
     return (
-      <main style={{ fontFamily: 'sans-serif', padding: '2rem', color: 'red' }}>
-        Session error: {sessionError}
+      <main className="shell">
+        <p className="errorText">Session error: {sessionError}</p>
       </main>
     );
   }
 
   if (!session) {
-    return <main style={{ fontFamily: 'sans-serif', padding: '2rem' }}>Verifying session...</main>;
+    return (
+      <main className="shell">
+        <p className="helperText">Verifying session…</p>
+      </main>
+    );
   }
 
   return (
-    <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1>Mythos Calculator</h1>
-      <p>
-        Welcome, {session.displayName} ({session.email})
-      </p>
-      <p>Credits charged this session: {creditsChargedTotal}</p>
-      <p>
-        <a href={lt ? `/llm?lt=${encodeURIComponent(lt)}` : '/llm'}>Try LLM Chat →</a>
-      </p>
+    <>
+      <Head>
+        <title>Mythos · Calculator</title>
+      </Head>
+      <main className="shell">
+        <div className="brandStrip">
+          <span className="wordmark">Mythos</span>
+          <span className="modeLabel">Calculator</span>
+        </div>
 
-      {calcError && <p style={{ color: 'red' }}>{calcError}</p>}
+        <div className="panel">
+          <div className="identity">
+            <h1>Welcome, {session.displayName}</h1>
+            <p>{session.email}</p>
+          </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem' }}>
-        <input type="number" value={a} onChange={(e) => setA(Number(e.target.value))} disabled={isSubmitting} />
-        <select
-          value={operation}
-          onChange={(e) => setOperation(e.target.value as Operation)}
-          disabled={isSubmitting}
-        >
-          <option value="add">+</option>
-          <option value="subtract">-</option>
-          <option value="multiply">*</option>
-          <option value="divide">/</option>
-        </select>
-        <input type="number" value={b} onChange={(e) => setB(Number(e.target.value))} disabled={isSubmitting} />
-        <button onClick={handleCalculate} disabled={isSubmitting}>
-          {pendingLabel ?? '='}
-        </button>
-      </div>
+          <div className="readout">
+            <div className="readoutLabel">Credits charged this session</div>
+            <div key={creditsChargedTotal} className="readoutValue flash">{creditsChargedTotal}</div>
+          </div>
 
-      {result !== null && <p>Result: {result}</p>}
-    </main>
+          <div style={{ marginTop: '1.5rem' }}>
+            {renderKeypad(handleCalculate, pendingLabel ?? '=', isSubmitting)}
+          </div>
+
+          {result !== null && (
+            <p className="calcResult">
+              Result: <strong>{result}</strong>
+            </p>
+          )}
+          {calcError && <p className="errorText">{calcError}</p>}
+        </div>
+
+        <a className="navLink" href={lt ? `/llm?lt=${encodeURIComponent(lt)}` : '/llm'}>
+          Open LLM Chat
+        </a>
+      </main>
+    </>
   );
 }
