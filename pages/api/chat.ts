@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
-import { decodeSession, getLlmBillingMetadata, llm, MythosError } from '@mythos-work/sdk';
+import { decodeSession, MythosError } from '@mythos-work/sdk';
+import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
 
 import { SESSION_COOKIE_NAME } from '../../lib/session-cookie';
 
