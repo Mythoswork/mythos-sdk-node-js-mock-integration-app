@@ -59,10 +59,16 @@ export default async function verifySession(req: NextApiRequest, res: NextApiRes
     // endpoint -- can read it back via decodeSession() without ever touching Mythos's
     // single-use /consume endpoint again.
     const cookieValue = encodeSession(session);
-    const secureAttribute = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    // This app runs inside the Mythos dashboard's iframe -- a cross-site context. SameSite=Lax
+    // cookies are never sent there, so every page switch (e.g. /calculator -> /llm) re-consumed
+    // the single-use `lt` and failed with "Token already consumed". SameSite=None requires
+    // Secure; Partitioned (CHIPS) keeps it working when the browser blocks third-party cookies.
+    // Plain local dev (http, not embedded) keeps Lax since Secure cookies need HTTPS.
+    const crossSiteAttributes =
+      process.env.NODE_ENV === 'production' ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
     res.setHeader(
       'Set-Cookie',
-      `${SESSION_COOKIE_NAME}=${cookieValue}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}${secureAttribute}`,
+      `${SESSION_COOKIE_NAME}=${cookieValue}; Path=/; HttpOnly; ${crossSiteAttributes}; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`,
     );
 
     res.status(200).json({ success: true, data: publicSessionOf(session) });
