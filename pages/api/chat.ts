@@ -1,6 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
-import { decodeSession, MythosError } from '@mythos-work/sdk';
+import {
+  decodeSession,
+  InsufficientFundsError,
+  InvalidLaunchTokenError,
+  MythosError,
+  SessionNotFoundError,
+} from '@mythos-work/sdk';
 import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
 
 import { SESSION_COOKIE_NAME } from '../../lib/session-cookie';
@@ -38,10 +44,10 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
   // fallback returns a plain OpenAI client instead. Only the model id and billing
   // metadata differ; the client never needs to know or choose which mode it's in.
   const cookieValue = req.cookies[SESSION_COOKIE_NAME];
-  const session = cookieValue ? decodeSession(cookieValue) : null;
-  const isStandalone = !session;
 
   try {
+    const session = cookieValue ? decodeSession(cookieValue) : null;
+    const isStandalone = !session;
     const client = llm<OpenAI>(session, {
       apiKey: PRODUCER_OPENAI_API_KEY,
       fallback: new OpenAI({ apiKey: PRODUCER_OPENAI_API_KEY, baseURL: STANDALONE_BASE_URL }),
@@ -64,6 +70,18 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
       },
     });
   } catch (err: unknown) {
+    if (err instanceof InsufficientFundsError) {
+      res.status(402).json({ success: false, error: 'Insufficient funds' });
+      return;
+    }
+    if (err instanceof SessionNotFoundError) {
+      res.status(404).json({ success: false, error: 'Session not found' });
+      return;
+    }
+    if (err instanceof InvalidLaunchTokenError) {
+      res.status(401).json({ success: false, error: 'Invalid launch token' });
+      return;
+    }
     if (err instanceof MythosError) {
       res.status(500).json({ success: false, error: 'Chat service is misconfigured' });
       return;

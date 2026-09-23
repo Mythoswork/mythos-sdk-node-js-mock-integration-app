@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-(This repo pins a local `file:` tarball since the SDK isn't published yet — see `package.json`. A real integration would use the published package.)
+This repo pins the published `@mythos-work/sdk@0.0.8` package.
 
 ---
 
@@ -111,7 +111,7 @@ client-supplied credit amount. Keep the full `MythosSession` returned by the ser
 `requireLaunchToken()` handler, then create the official OpenAI client on your server:
 
 ```ts
-import { getLlmBillingMetadata, llm } from '@mythos-work/sdk';
+import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
 
 const client = llm(session, { apiKey: process.env.PRODUCER_OPENAI_API_KEY });
 const completion = await client.chat.completions.create({
@@ -123,7 +123,7 @@ const billing = getLlmBillingMetadata(completion);
 
 The SDK sends the provider key and session identity to Mythos. The gateway observes provider
 usage, settles the charge, and returns billing metadata. This mockup stores the identity-bearing
-session only in its server-side session cache; the browser receives only public session fields.
+session in an encrypted HttpOnly cookie; the browser receives only public session fields.
 
 ---
 

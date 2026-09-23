@@ -2,10 +2,12 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Request, Response } from 'express';
 import { requireLaunchToken, verifyLaunchToken, encodeSession, decodeSession } from '@mythos-work/sdk';
 import type { MythosSession } from '@mythos-work/sdk';
+import { requireSessionSecret } from '../../lib/config';
 import { getListingIds } from '../../lib/listing-ids-store';
 import { SESSION_COOKIE_MAX_AGE_SECONDS, SESSION_COOKIE_NAME } from '../../lib/session-cookie';
 
 const handler = requireLaunchToken({ resolveListingIds: getListingIds });
+requireSessionSecret();
 
 function publicSessionOf(session: MythosSession): MythosSession {
   const publicSession = { ...session };
