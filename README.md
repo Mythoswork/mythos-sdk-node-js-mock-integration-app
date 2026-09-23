@@ -13,7 +13,7 @@ Your app is a **Producer**. Mythos (the marketplace/FE) sends users to your app 
 1. Prove you're alive (handshake) — once, at listing-registration time.
 2. Verify + consume the launch token — once, on load.
 3. Tell the parent frame you're ready (`postMessage`) — once, right after step 2 succeeds.
-4. Meter usage — once per billable operation, for as long as the token hasn't expired (5 min from mint).
+4. Meter calculator usage with `reportUsage`, and route LLM inference through the SDK client.
 
 None of this requires you to know anything about Mythos users, passwords, or sessions beyond what's in the signed token. You never see a Mythos password. You never call Mythos except through the SDK.
 
@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-(This repo pins a local `file:` tarball since the SDK isn't published yet — see `package.json`. A real integration would use the published package.)
+This repo pins the published `@mythos-work/sdk@0.0.8` package.
 
 ---
 
@@ -101,6 +101,29 @@ await reportUsage(session.sessionJti, { credits: 1, reason: 'calculator:add' });
 - Catch `InsufficientFundsError` → surface as HTTP 402 to your frontend, don't let it bubble as a generic 500.
 - Catch `SessionNotFoundError` → the `lt` expired (5 min from mint) or was never valid.
 - Charge whatever `credits` value makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
+
+---
+
+## 5a. Use SDK-owned LLM inference
+
+LLM inference is different from calculator work: do not call `reportUsage` and do not send a
+client-supplied credit amount. Keep the full `MythosSession` returned by the server-side
+`requireLaunchToken()` handler, then create the official OpenAI client on your server:
+
+```ts
+import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
+
+const client = llm(session, { apiKey: process.env.PRODUCER_OPENAI_API_KEY });
+const completion = await client.chat.completions.create({
+  model: 'openai/gpt-4o-mini',
+  messages: [{ role: 'user', content: message }],
+});
+const billing = getLlmBillingMetadata(completion);
+```
+
+The SDK sends the provider key and session identity to Mythos. The gateway observes provider
+usage, settles the charge, and returns billing metadata. This mockup stores the identity-bearing
+session in an encrypted HttpOnly cookie; the browser receives only public session fields.
 
 ---
 
@@ -186,6 +209,7 @@ The SDK reads `MYTHOS_LISTING_ID` per-request (not cached) to validate the `aud`
 - [ ] `requireLaunchToken()` called exactly once per launch, on load
 - [ ] `window.parent.postMessage({type: 'mythos:handshake'}, ...)` sent right after that succeeds
 - [ ] Metering uses `verifyLaunchToken()` (non-consuming) + `reportUsage()`, not a second `requireLaunchToken()` call
+- [ ] LLM inference uses `llm(session, { apiKey })`; do not call `reportUsage()` for inference
 - [ ] `InsufficientFundsError` / `SessionNotFoundError` mapped to sane HTTP responses, not generic 500s
 - [ ] Own auth/paywall (if any) fully bypassed when `lt` is present
 - [ ] Listing registered with a reachable `launch_url` (HTTPS + real TLD in production)

@@ -22,6 +22,7 @@ export interface CreateWebAppListingInput {
   cover_image: string;
   thumbnail_image?: string;
   price_credits?: number;
+  producer_margin_pct?: number;
 }
 
 export interface LaunchResult {
@@ -40,12 +41,12 @@ export interface LaunchHistoryItem {
   total_metered_credits_charged: number;
 }
 
-async function parseJsonOrThrow(res: Response, label: string): Promise<any> {
-  const body = await res.json().catch(() => ({}));
+async function parseJsonOrThrow<T>(res: Response, label: string): Promise<T> {
+  const body: unknown = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(`${label} failed: HTTP ${res.status} ${JSON.stringify(body)}`);
   }
-  return body;
+  return body as T;
 }
 
 export async function login(apiUrl: string, email: string, password: string): Promise<LoginResult> {
@@ -54,7 +55,11 @@ export async function login(apiUrl: string, email: string, password: string): Pr
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  const body = await parseJsonOrThrow(res, 'login');
+  const body = await parseJsonOrThrow<{
+    token: string;
+    refreshToken: string;
+    user: LoginResult['user'];
+  }>(res, 'login');
   return { token: body.token, refreshToken: body.refreshToken, user: body.user };
 }
 
@@ -62,7 +67,7 @@ export async function getWallet(apiUrl: string, bearerToken: string): Promise<Wa
   const res = await fetch(`${apiUrl}/api/wallet`, {
     headers: { Authorization: `Bearer ${bearerToken}` },
   });
-  return parseJsonOrThrow(res, 'getWallet');
+  return parseJsonOrThrow<WalletSummary>(res, 'getWallet');
 }
 
 export async function createWebAppListing(
@@ -75,7 +80,10 @@ export async function createWebAppListing(
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearerToken}` },
     body: JSON.stringify(input),
   });
-  const body = await parseJsonOrThrow(res, 'createWebAppListing');
+  const body = await parseJsonOrThrow<{ data: { listing_id: string; launch_url: string; frame_sandbox: string[] } }>(
+    res,
+    'createWebAppListing',
+  );
   return body.data;
 }
 
@@ -84,7 +92,7 @@ export async function launchApp(apiUrl: string, bearerToken: string, listingId: 
     method: 'POST',
     headers: { Authorization: `Bearer ${bearerToken}` },
   });
-  const body = await parseJsonOrThrow(res, 'launchApp');
+  const body = await parseJsonOrThrow<{ data: LaunchResult }>(res, 'launchApp');
   return body.data;
 }
 
@@ -97,7 +105,7 @@ export async function getLaunchHistory(
   const res = await fetch(`${apiUrl}/api/launch-history?limit=${limit}&offset=${offset}`, {
     headers: { Authorization: `Bearer ${bearerToken}` },
   });
-  return parseJsonOrThrow(res, 'getLaunchHistory');
+  return parseJsonOrThrow<{ data: LaunchHistoryItem[]; total: number; limit: number; offset: number }>(res, 'getLaunchHistory');
 }
 
 export function decodeLaunchTokenJti(launchToken: string): string {
