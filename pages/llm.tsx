@@ -2,7 +2,6 @@ import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useMythos } from '@mythos-work/sdk/react';
-import { estimateChatCredits } from '@/lib/pricing';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -60,7 +59,7 @@ export default function LlmPage() {
       // so the number isn't a meaningless hardcoded stub. Skipped entirely in standalone
       // mode (no `session`), same as calculator's own precedent.
       if (session) {
-        const { approved } = await confirmCharge({ credits: estimateChatCredits(message), reason: `chat: "${message.slice(0, 40)}"`, kind: 'llm' });
+        const { approved } = await confirmCharge({ kind: 'llm', reason: `chat: "${message.slice(0, 40)}"` });
         if (!approved) {
           setChatError(
             'Charge declined, timed out, or the dashboard is not listening — check the console for details.',
