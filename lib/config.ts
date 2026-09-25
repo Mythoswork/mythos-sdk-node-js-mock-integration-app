@@ -24,10 +24,6 @@ export function getConfig(): AppConfig {
   };
 }
 
-export function requireSessionSecret(): string {
-  return requireEnv('MYTHOS_SESSION_SECRET');
-}
-
 export function requireListingId(): string {
   const { mythosListingId } = getConfig();
   if (!mythosListingId) {

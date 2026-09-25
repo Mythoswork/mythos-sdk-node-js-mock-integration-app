@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/router';
 import Head from 'next/head';
+import Link from 'next/link';
 import type { MythosSession } from '@mythos-work/sdk';
 import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
 import { estimateChatCredits } from '@/lib/pricing';
@@ -15,11 +15,9 @@ const STANDALONE_USERNAME = 'demo';
 const STANDALONE_PASSWORD = 'demo';
 
 export default function LlmPage() {
-  const router = useRouter();
-  const lt = typeof router.query.lt === 'string' ? router.query.lt : undefined;
-
   const verifyStarted = useRef(false);
   const [session, setSession] = useState<MythosSession | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   // Standalone (non-Mythos) gate state — only relevant when there's no Mythos session at all.
@@ -42,28 +40,28 @@ export default function LlmPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    // router.isReady guards against Next's Pages Router not having parsed the query
-    // string yet on first render -- without this, the very first verify attempt can fire
-    // with `lt` still undefined even though it's right there in the URL, and since
-    // verifyStarted latches immediately, that bad attempt is never retried.
-    if (!router.isReady || verifyStarted.current) return;
+    if (verifyStarted.current) return;
     verifyStarted.current = true;
-
-    // No `lt` is fine here -- the session cookie from an earlier page (e.g. /calculator)
-    // already covers it; /api/verify-session checks that cookie before ever needing `lt`.
-    const url = lt ? `/api/verify-session?lt=${encodeURIComponent(lt)}` : '/api/verify-session';
-    fetch(url)
+    const savedSessionToken = window.sessionStorage.getItem('mythosSessionToken');
+    fetch(`/api/mythos/session${window.location.search}`, {
+      headers: savedSessionToken ? { 'X-Mythos-Session': savedSessionToken } : {},
+    })
       .then((res) => res.json())
       .then((body) => {
-        if (body.success) {
-          setSession(body.data);
+        if (body.success && body.data) {
+          setSession(body.data.session);
+          setSessionToken(body.data.sessionToken);
+          window.sessionStorage.setItem('mythosSessionToken', body.data.sessionToken);
           sendHandshake();
+        } else if (body.success && body.data === null) {
+          window.sessionStorage.removeItem('mythosSessionToken');
+          setSessionError('standalone');
         } else {
           setSessionError(body.error ?? 'Session verification failed');
         }
       })
       .catch((err) => setSessionError(String(err)));
-  }, [lt, router.isReady]);
+  }, []);
 
   function handleStandaloneLogin() {
     setStandaloneLoginError(null);
@@ -108,11 +106,13 @@ export default function LlmPage() {
       setInput('');
 
       // Always the same endpoint -- /api/chat decides Mythos-billed vs. standalone by
-      // whether the session cookie is present, the same way /api/calculate always just
-      // takes `lt`. The client never needs to know or choose which mode it's in.
+      // whether the request carries a Mythos session. The client does not choose a mode.
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { 'X-Mythos-Session': sessionToken } : {}),
+        },
         body: JSON.stringify({ message }),
       });
       const body = await res.json();
@@ -190,10 +190,7 @@ export default function LlmPage() {
     );
   }
 
-  // Standalone (no Mythos at all): only once verify-session has actually been tried and
-  // found nothing -- no `lt`, and no session cookie from another page either. Mirrors
-  // calculator.tsx's own standalone gate exactly.
-  if (!lt && !session && sessionError) {
+  if (!session && sessionError === 'standalone') {
     if (!isStandaloneLoggedIn) {
       return (
         <>
@@ -337,9 +334,9 @@ export default function LlmPage() {
           <div className="chatBody">{renderChatPanel()}</div>
         </div>
 
-        <a className="navLink" href={lt ? `/calculator?lt=${encodeURIComponent(lt)}` : '/calculator'}>
+        <Link className="navLink" href="/calculator">
           Open Calculator
-        </a>
+        </Link>
       </main>
     </>
   );

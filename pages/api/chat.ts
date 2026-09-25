@@ -1,15 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
-import {
-  decodeSession,
-  InsufficientFundsError,
-  InvalidLaunchTokenError,
-  MythosError,
-  SessionNotFoundError,
-} from '@mythos-work/sdk';
-import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
+import { MythosError } from '@mythos-work/sdk';
 
-import { SESSION_COOKIE_NAME } from '../../lib/session-cookie';
+import { logMythosError } from '../../lib/logger';
+import { mythos } from '../../lib/mythos';
 
 const PRODUCER_OPENAI_API_KEY = process.env.PRODUCER_OPENAI_API_KEY;
 const MODEL_ID = process.env.ALPHA_MODEL_ID ?? 'openai/gpt-4o-mini';
@@ -34,30 +28,23 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
     return;
   }
   if (!PRODUCER_OPENAI_API_KEY) {
+    logMythosError('chat: PRODUCER_OPENAI_API_KEY is not set', new Error('Missing provider API key'));
     res.status(500).json({ success: false, error: 'Server misconfigured: PRODUCER_OPENAI_API_KEY not set' });
     return;
   }
 
-  // One endpoint either way, same as /api/calculate: with a Mythos session (from the
-  // cookie /api/verify-session set), llm()'s returned client is routed through the Mythos
-  // gateway and billed. Without one -- this app's own standalone demo mode -- llm()'s
-  // fallback returns a plain OpenAI client instead. Only the model id and billing
-  // metadata differ; the client never needs to know or choose which mode it's in.
-  const cookieValue = req.cookies[SESSION_COOKIE_NAME];
-
   try {
-    const session = cookieValue ? decodeSession(cookieValue) : null;
-    const isStandalone = !session;
-    const client = llm<OpenAI>(session, {
+    const session = await mythos.getSession(req);
+    const client = await mythos.llm<OpenAI>(req, {
       apiKey: PRODUCER_OPENAI_API_KEY,
       fallback: new OpenAI({ apiKey: PRODUCER_OPENAI_API_KEY, baseURL: STANDALONE_BASE_URL }),
     });
     const completion = await client.chat.completions.create({
-      model: isStandalone ? STANDALONE_MODEL_ID : MODEL_ID,
+      model: session ? MODEL_ID : STANDALONE_MODEL_ID,
       messages: [{ role: 'user', content: message }],
       stream: false,
     });
-    const billing = isStandalone ? null : getLlmBillingMetadata(completion);
+    const billing = session ? mythos.billing(completion) : null;
 
     res.status(200).json({
       success: true,
@@ -70,22 +57,12 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
       },
     });
   } catch (err: unknown) {
-    if (err instanceof InsufficientFundsError) {
-      res.status(402).json({ success: false, error: 'Insufficient funds' });
-      return;
-    }
-    if (err instanceof SessionNotFoundError) {
-      res.status(404).json({ success: false, error: 'Session not found' });
-      return;
-    }
-    if (err instanceof InvalidLaunchTokenError) {
-      res.status(401).json({ success: false, error: 'Invalid launch token' });
-      return;
-    }
     if (err instanceof MythosError) {
-      res.status(500).json({ success: false, error: 'Chat service is misconfigured' });
+      if (err.httpStatus >= 500) logMythosError(`chat: SDK request failed (${err.code})`, err);
+      res.status(err.httpStatus).json({ success: false, error: err.message, code: err.code });
       return;
     }
+    logMythosError('chat: upstream request failed', err);
     res.status(502).json({ success: false, error: 'Chat request failed' });
   }
 }

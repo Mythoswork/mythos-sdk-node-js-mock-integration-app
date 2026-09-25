@@ -10,10 +10,10 @@ If you're integrating your own SaaS with Mythos, this doc is the part that matte
 
 Your app is a **Producer**. Mythos (the marketplace/FE) sends users to your app in an iframe with a signed `?lt=<token>` query param. Your job:
 
-1. Prove you're alive (handshake) — once, at listing-registration time.
-2. Verify + consume the launch token — once, on load.
+1. Create one SDK object at startup; it validates configuration and owns session handling.
+2. Mount its catch-all handlers for launch, handshake and listing registration.
 3. Tell the parent frame you're ready (`postMessage`) — once, right after step 2 succeeds.
-4. Meter calculator usage with `reportUsage`, and route LLM inference through the SDK client.
+4. Charge calculator usage with `mythos.charge()` and route LLM inference through `mythos.llm()`.
 
 None of this requires you to know anything about Mythos users, passwords, or sessions beyond what's in the signed token. You never see a Mythos password. You never call Mythos except through the SDK.
 
@@ -25,49 +25,37 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-This repo pins the published `@mythos-work/sdk@0.0.8` package.
+This repo pins `@mythos-work/sdk@0.1.1` for the new API. Use the packed SDK tarball for local validation until 0.1.1 is published.
 
 ---
 
-## 2. Implement the handshake route (required, checked once at listing registration)
+## 2. Mount the SDK handlers (required)
 
 Mythos calls `POST /api/listings/web-app` (from your side, someone registers your app as a listing) → backend synchronously calls **your** `launch_url` + `/.well-known/mythos-handshake` with a short-lived signed check token, 5s timeout. If this fails, your listing registration fails outright.
 
 ```ts
-// pages/api/well-known/mythos-handshake.ts
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { handshakeRoute } from '@mythos-work/sdk';
+// lib/mythos.ts
+export const mythos = createMythos({ resolveListingIds: getListingIds, onListingRegistered: addListingId });
 
-const handler = handshakeRoute();
-
-export default function mythosHandshake(req: NextApiRequest, res: NextApiResponse) {
-  return handler(req as any, res as any, () => {});
-}
+// pages/api/mythos/[...mythos].ts
+export default pagesHandler(mythos);
 ```
 
-Must be reachable at `<launch_url origin>/.well-known/mythos-handshake` — not under your app's own auth, this runs before any user session exists.
+Rewrite `/.well-known/mythos-handshake` to `/api/mythos/handshake` and `/.well-known/mythos-listing-registered` to `/api/mythos/listing-registered`. The SDK handles both well-known endpoints.
 
 ---
 
-## 3. Verify + consume the launch token (required, exactly once per launch)
+## 3. Establish the session (required)
 
-When your app loads with `?lt=<token>`, call this **exactly once** — it atomically consumes the session server-side (DB-enforced single-use, not in-memory). Calling it twice on the same `lt` fails the second time with "already consumed."
+The SDK session endpoint verifies and consumes the incoming launch token once, then reuses its encrypted HttpOnly cookie when the user switches app pages. It returns `data: null` when the visit is standalone.
 
 ```ts
-// pages/api/verify-session.ts
-import { requireLaunchToken } from '@mythos-work/sdk';
-
-const handler = requireLaunchToken();
-
-export default function verifySession(req, res) {
-  return handler(req, res, () => {
-    const session = req.mythos; // { userId, email, displayName, listingId, sessionJti }
-    res.status(200).json({ success: true, data: session });
-  });
-}
+const body = await fetch(`/api/mythos/session${window.location.search}`).then((res) => res.json());
+const session = body.data?.session ?? null;
+const sessionToken = body.data?.sessionToken;
 ```
 
-Do this once on mount (`pages/calculator.tsx` calls it from a `useEffect` keyed on `lt`, guarded by a ref so it can't double-fire on re-render).
+Send `sessionToken` as `X-Mythos-Session` on SDK-backed requests when a browser does not send third-party cookies.
 
 ---
 
@@ -76,7 +64,7 @@ Do this once on mount (`pages/calculator.tsx` calls it from a `useEffect` keyed 
 **This step is not optional and is not obvious from the SDK types.** After step 3 succeeds, the Mythos FE is waiting for a `postMessage` from your iframe to know your app actually loaded and authenticated. If you never send it, the FE shows a generic "app did not respond" timeout after 5s — even though your app loaded fine, auth worked, and everything else is correct. There's no compile-time or SDK-level check that catches this; it only shows up as a silent FE-side timeout.
 
 ```ts
-// after verify-session succeeds, client-side:
+// after /api/mythos/session succeeds, client-side:
 window.parent.postMessage({ type: 'mythos:handshake' }, '*');
 ```
 
@@ -86,15 +74,10 @@ Use a real target origin (not `'*'`) in production — scope it to the known Myt
 
 ## 5. Meter usage (required for any billable operation)
 
-Do **not** call `requireLaunchToken()` again for this — it consumes, and you already consumed once in step 3. Use the non-consuming `verifyLaunchToken()` to re-validate the still-live `lt`, then report usage:
+Call `mythos.charge()` with the server request. The SDK reads the cookie or `X-Mythos-Session` header and meters against the established session:
 
 ```ts
-// pages/api/calculate.ts
-import { verifyLaunchToken, reportUsage, InsufficientFundsError, SessionNotFoundError } from '@mythos-work/sdk';
-
-const session = await verifyLaunchToken(lt);
-const result = doTheWork();
-await reportUsage(session.sessionJti, { credits: 1, reason: 'calculator:add' });
+await mythos.charge(req, { credits: 1, reason: 'calculator:add' });
 ```
 
 - `reportUsage` charges credits from the user's wallet immediately — real money-equivalent movement, not a log entry.
@@ -107,18 +90,17 @@ await reportUsage(session.sessionJti, { credits: 1, reason: 'calculator:add' });
 ## 5a. Use SDK-owned LLM inference
 
 LLM inference is different from calculator work: do not call `reportUsage` and do not send a
-client-supplied credit amount. Keep the full `MythosSession` returned by the server-side
-`requireLaunchToken()` handler, then create the official OpenAI client on your server:
+client-supplied credit amount. Create the official OpenAI client on your server with the request:
 
 ```ts
-import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
+import { createMythos } from '@mythos-work/sdk';
 
-const client = llm(session, { apiKey: process.env.PRODUCER_OPENAI_API_KEY });
+const client = await mythos.llm(req, { apiKey: process.env.PRODUCER_OPENAI_API_KEY });
 const completion = await client.chat.completions.create({
   model: 'openai/gpt-4o-mini',
   messages: [{ role: 'user', content: message }],
 });
-const billing = getLlmBillingMetadata(completion);
+const billing = mythos.billing(completion);
 ```
 
 The SDK sends the provider key and session identity to Mythos. The gateway observes provider
@@ -127,16 +109,16 @@ session in an encrypted HttpOnly cookie; the browser receives only public sessio
 
 ---
 
-## 6. Bypass your own auth/paywall when `lt` is present
+## 6. Bypass your own auth/paywall when a Mythos session is present
 
-If your app also has its own independent login/subscription for direct (non-Mythos) traffic, branch on `lt` **before** any of that runs:
+If your app also has its own independent login/subscription for direct (non-Mythos) traffic, branch on the SDK session:
 
 ```ts
-if (!lt) {
+if (!session) {
   // no Mythos session at all — this is direct traffic, run your own auth/paywall
   return <YourOwnLoginAndPaywallFlow />;
 }
-// lt present — skip your own gate entirely, go straight to steps 3–5 above
+// Mythos session present — skip your own gate and use the SDK-backed charge/LLM APIs
 ```
 
 These are two totally separate, non-linked identity systems. A user authenticated via Mythos gets access through Mythos credits, full stop — regardless of whether they also happen to have (or don't have) an account in your own system.
@@ -197,20 +179,21 @@ This repo's `scripts/bootstrap.ts` (`npm run bootstrap`) does this once: logs in
 MYTHOS_API_URL=<mythos-backend base URL, e.g. http://localhost:5001>
 CALCULATOR_BASE_URL=<your app's own public base URL, e.g. http://localhost:3001>
 MYTHOS_LISTING_ID=<written automatically by bootstrap.ts after registration>
+MYTHOS_SESSION_SECRET=<32+ random characters; generate with openssl rand -base64 32>
 ```
 
-The SDK reads `MYTHOS_LISTING_ID` per-request (not cached) to validate the `aud` claim on incoming tokens — make sure it's set before any `verifyLaunchToken`/`requireLaunchToken` call runs.
+`createMythos()` validates the session secret, API URL and listing configuration when the SDK instance is created.
 
 ---
 
 ## Integration checklist
 
-- [ ] `/.well-known/mythos-handshake` implemented via `handshakeRoute()`, reachable without auth
-- [ ] `requireLaunchToken()` called exactly once per launch, on load
+- [ ] `createMythos()` called once at startup with the SDK catch-all mounted
+- [ ] Well-known handshake and listing-registration rewrites reach the SDK handlers
 - [ ] `window.parent.postMessage({type: 'mythos:handshake'}, ...)` sent right after that succeeds
-- [ ] Metering uses `verifyLaunchToken()` (non-consuming) + `reportUsage()`, not a second `requireLaunchToken()` call
-- [ ] LLM inference uses `llm(session, { apiKey })`; do not call `reportUsage()` for inference
-- [ ] `InsufficientFundsError` / `SessionNotFoundError` mapped to sane HTTP responses, not generic 500s
-- [ ] Own auth/paywall (if any) fully bypassed when `lt` is present
+- [ ] Metering uses `mythos.charge(req, ...)`
+- [ ] LLM inference uses `await mythos.llm(req, ...)` and `mythos.billing(completion)`; do not meter inference with `reportUsage()`
+- [ ] Catch `MythosError` and map its `httpStatus` and `code` to the HTTP response
+- [ ] Own auth/paywall (if any) bypassed when `mythos.getSession(req)` returns a session
 - [ ] Listing registered with a reachable `launch_url` (HTTPS + real TLD in production)
 - [ ] (Optional) Pre-charge confirmation wired for actions that warrant it — see step 5b

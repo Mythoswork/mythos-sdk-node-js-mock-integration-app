@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/router';
 import Head from 'next/head';
+import Link from 'next/link';
 import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
 import { CREDITS_PER_CALCULATION } from '@/lib/pricing';
 
@@ -26,14 +26,12 @@ const STANDALONE_USERNAME = 'demo';
 const STANDALONE_PASSWORD = 'demo';
 
 export default function Calculator() {
-  const router = useRouter();
-  const lt = typeof router.query.lt === 'string' ? router.query.lt : undefined;
-
   const verifyStarted = useRef(false);
   const [session, setSession] = useState<MythosSession | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
-  // Standalone (non-Mythos) gate state — only relevant when there's no `lt` at all.
+  // Standalone (non-Mythos) gate state.
   const [standaloneUsername, setStandaloneUsername] = useState('');
   const [standalonePassword, setStandalonePassword] = useState('');
   const [standaloneLoginError, setStandaloneLoginError] = useState<string | null>(null);
@@ -50,34 +48,31 @@ export default function Calculator() {
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    // router.isReady guards against Next's Pages Router not having parsed the query
-    // string yet on first render -- without this, the very first verify attempt can fire
-    // with `lt` still undefined even though it's right there in the URL, and since
-    // verifyStarted latches immediately, that bad attempt is never retried.
-    if (!router.isReady || verifyStarted.current) return;
+    if (verifyStarted.current) return;
     verifyStarted.current = true;
-
-    // No `lt` is fine here -- an existing app session cookie can cover it;
-    // /api/verify-session checks that cookie before ever needing `lt`.
-    const url = lt ? `/api/verify-session?lt=${encodeURIComponent(lt)}` : '/api/verify-session';
-    fetch(url)
+    const savedSessionToken = window.sessionStorage.getItem('mythosSessionToken');
+    fetch(`/api/mythos/session${window.location.search}`, {
+      headers: savedSessionToken ? { 'X-Mythos-Session': savedSessionToken } : {},
+    })
       .then((res) => res.json())
       .then((body) => {
-        if (body.success) {
-          setSession(body.data);
+        if (body.success && body.data) {
+          setSession(body.data.session);
+          setSessionToken(body.data.sessionToken);
+          window.sessionStorage.setItem('mythosSessionToken', body.data.sessionToken);
           sendHandshake();
+        } else if (body.success && body.data === null) {
+          window.sessionStorage.removeItem('mythosSessionToken');
+          setSessionError('standalone');
         } else {
           setSessionError(body.error ?? 'Session verification failed');
         }
       })
       .catch((err) => setSessionError(String(err)));
-  }, [lt, router.isReady]);
+  }, []);
 
   async function handleCalculate() {
-    if (!lt) {
-      setCalcError('Missing launch token in the URL -- reopen this app from Mythos to calculate.');
-      return;
-    }
+    if (!session) return;
     setCalcError(null);
     setIsSubmitting(true);
 
@@ -94,8 +89,11 @@ export default function Calculator() {
       setPendingLabel('Calculating…');
       const res = await fetch('/api/calculate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lt, operation, a, b }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { 'X-Mythos-Session': sessionToken } : {}),
+        },
+        body: JSON.stringify({ operation, a, b }),
       });
       const body = await res.json();
       if (!body.success) {
@@ -174,11 +172,7 @@ export default function Calculator() {
     );
   }
 
-  // Standalone (no Mythos at all): only once verify-session has actually been tried and
-  // found nothing -- no `lt`, and no session cookie from another page either. The SDK
-  // never runs here, so this app's own auth + paywall gate the feature; there is nothing
-  // for Mythos to bypass, because Mythos was never involved.
-  if (!lt && !session && sessionError) {
+  if (!session && sessionError === 'standalone') {
     if (!isStandaloneLoggedIn) {
       return (
         <>
@@ -332,9 +326,9 @@ export default function Calculator() {
           {calcError && <p className="errorText">{calcError}</p>}
         </div>
 
-        <a className="navLink" href={lt ? `/llm?lt=${encodeURIComponent(lt)}` : '/llm'}>
+        <Link className="navLink" href="/llm">
           Open LLM Chat
-        </a>
+        </Link>
       </main>
     </>
   );

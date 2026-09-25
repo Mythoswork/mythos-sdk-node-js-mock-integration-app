@@ -6,7 +6,7 @@ import { Redis } from '@upstash/redis';
 
 // Vercel Serverless Functions are isolated per route file — each has its own
 // /tmp, so a file store can never share state between e.g. the callback
-// handler and verify-session. Redis (Vercel KV / Upstash, free tier) is
+// handler and the catch-all Mythos route. Redis (Vercel KV / Upstash, free tier) is
 // required for that to actually work in production; falls back to a local
 // JSON file for zero-setup local dev, matching the file's original scope
 // (this app has no real persistence layer — demonstration only).
