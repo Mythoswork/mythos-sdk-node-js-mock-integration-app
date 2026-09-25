@@ -12,7 +12,7 @@ Your app is a **Producer**. Mythos (the marketplace/FE) sends users to your app 
 
 1. Create one SDK object at startup; it validates configuration and owns session handling.
 2. Mount its catch-all handlers for launch, handshake and listing registration.
-3. Tell the parent frame you're ready (`postMessage`) — once, right after step 2 succeeds.
+3. Initialize `useMythos()` in browser pages; it selects cookie/header transport and sends the handshake.
 4. Charge calculator usage with `mythos.charge()` and route LLM inference through `mythos.llm()`.
 
 None of this requires you to know anything about Mythos users, passwords, or sessions beyond what's in the signed token. You never see a Mythos password. You never call Mythos except through the SDK.
@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-This repo pins `@mythos-work/sdk@0.1.1` for the new API. Use the packed SDK tarball for local validation until 0.1.1 is published.
+This repo pins `@mythos-work/sdk@0.2.0`. Use the packed SDK tarball for local validation until 0.2.0 is published.
 
 ---
 
@@ -47,28 +47,25 @@ Rewrite `/.well-known/mythos-handshake` to `/api/mythos/handshake` and `/.well-k
 
 ## 3. Establish the session (required)
 
-The SDK session endpoint verifies and consumes the incoming launch token once, then reuses its encrypted HttpOnly cookie when the user switches app pages. It returns `data: null` when the visit is standalone.
+The browser hook verifies the session, prefers the encrypted HttpOnly cookie, and falls back to the session header only when a one-time cookie probe fails. It returns `status: 'standalone'` for direct visits.
 
-```ts
-const body = await fetch(`/api/mythos/session${window.location.search}`).then((res) => res.json());
-const session = body.data?.session ?? null;
-const sessionToken = body.data?.sessionToken;
+```tsx
+import { useMythos } from '@mythos-work/sdk/react';
+
+const { status, session, fetch: mythosFetch, confirmCharge, relaunch } = useMythos();
 ```
 
-Send `sessionToken` as `X-Mythos-Session` on SDK-backed requests when a browser does not send third-party cookies.
+Use `mythosFetch` for app API calls. App code does not read tokens or construct session headers.
 
 ---
 
 ## 4. Tell the parent frame you're ready (required — easy to miss, breaks silently)
 
-**This step is not optional and is not obvious from the SDK types.** After step 3 succeeds, the Mythos FE is waiting for a `postMessage` from your iframe to know your app actually loaded and authenticated. If you never send it, the FE shows a generic "app did not respond" timeout after 5s — even though your app loaded fine, auth worked, and everything else is correct. There's no compile-time or SDK-level check that catches this; it only shows up as a silent FE-side timeout.
+After step 3 succeeds, the Mythos FE waits for a handshake from your iframe. `useMythos()` sends it automatically when the session reaches `status: 'mythos'`.
 
 ```ts
-// after /api/mythos/session succeeds, client-side:
-window.parent.postMessage({ type: 'mythos:handshake' }, '*');
+const { status } = useMythos(); // handshake is automatic
 ```
-
-Use a real target origin (not `'*'`) in production — scope it to the known Mythos marketplace origin once you have it, `'*'` here is a demo-only shortcut.
 
 ---
 
@@ -105,7 +102,8 @@ const billing = mythos.billing(completion);
 
 The SDK sends the provider key and session identity to Mythos. The gateway observes provider
 usage, settles the charge, and returns billing metadata. This mockup stores the identity-bearing
-session in an encrypted HttpOnly cookie; the browser receives only public session fields.
+session in an encrypted HttpOnly cookie when cookies work. In header fallback mode, the opaque
+session token is kept in tab-scoped `sessionStorage` and attached only to same-origin requests.
 
 ---
 
@@ -127,16 +125,10 @@ These are two totally separate, non-linked identity systems. A user authenticate
 
 ## 5b. Pre-charge confirmation (required)
 
-Before firing any billable action, gate the client-side call to your own metering endpoint
-behind a `postMessage` round trip with the Mythos dashboard (`window.parent`), instead of
-calling it unconditionally — the Consumer must explicitly approve every charge. This app
-demonstrates that pattern in `lib/confirm-charge.ts`, wired up unconditionally in
-`pages/calculator.tsx`'s `handleCalculate`:
+Before firing any billable action, ask the shared browser client to confirm the charge with the Mythos dashboard. The Consumer must explicitly approve every charge:
 
 ```ts
-// lib/confirm-charge.ts — adapted from mythos-sdk/docs/examples/mythos-client.ts.
-// Resolves false (never rejects) on timeout, decline, or if not embedded — fail-closed.
-const approved = await confirmCharge(1, `${operation}(${a}, ${b})`);
+const { approved } = await confirmCharge({ credits: 1, reason: `${operation}(${a}, ${b})` });
 if (!approved) return; // charge skipped — your metering endpoint is never called
 ```
 
@@ -190,7 +182,7 @@ MYTHOS_SESSION_SECRET=<32+ random characters; generate with openssl rand -base64
 
 - [ ] `createMythos()` called once at startup with the SDK catch-all mounted
 - [ ] Well-known handshake and listing-registration rewrites reach the SDK handlers
-- [ ] `window.parent.postMessage({type: 'mythos:handshake'}, ...)` sent right after that succeeds
+- [ ] Browser pages use `useMythos()` for session state, authenticated fetches and automatic handshake
 - [ ] Metering uses `mythos.charge(req, ...)`
 - [ ] LLM inference uses `await mythos.llm(req, ...)` and `mythos.billing(completion)`; do not meter inference with `reportUsage()`
 - [ ] Catch `MythosError` and map its `httpStatus` and `code` to the HTTP response

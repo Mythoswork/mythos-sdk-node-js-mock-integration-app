@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import type { MythosSession } from '@mythos-work/sdk';
-import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
+import { useMythos } from '@mythos-work/sdk/react';
 import { estimateChatCredits } from '@/lib/pricing';
 
 interface ChatMessage {
@@ -15,10 +14,7 @@ const STANDALONE_USERNAME = 'demo';
 const STANDALONE_PASSWORD = 'demo';
 
 export default function LlmPage() {
-  const verifyStarted = useRef(false);
-  const [session, setSession] = useState<MythosSession | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
+  const { status, session, error, fetch: mythosFetch, confirmCharge, relaunch } = useMythos();
 
   // Standalone (non-Mythos) gate state — only relevant when there's no Mythos session at all.
   const [standaloneUsername, setStandaloneUsername] = useState('');
@@ -38,30 +34,6 @@ export default function LlmPage() {
   } | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (verifyStarted.current) return;
-    verifyStarted.current = true;
-    const savedSessionToken = window.sessionStorage.getItem('mythosSessionToken');
-    fetch(`/api/mythos/session${window.location.search}`, {
-      headers: savedSessionToken ? { 'X-Mythos-Session': savedSessionToken } : {},
-    })
-      .then((res) => res.json())
-      .then((body) => {
-        if (body.success && body.data) {
-          setSession(body.data.session);
-          setSessionToken(body.data.sessionToken);
-          window.sessionStorage.setItem('mythosSessionToken', body.data.sessionToken);
-          sendHandshake();
-        } else if (body.success && body.data === null) {
-          window.sessionStorage.removeItem('mythosSessionToken');
-          setSessionError('standalone');
-        } else {
-          setSessionError(body.error ?? 'Session verification failed');
-        }
-      })
-      .catch((err) => setSessionError(String(err)));
-  }, []);
 
   function handleStandaloneLogin() {
     setStandaloneLoginError(null);
@@ -88,12 +60,7 @@ export default function LlmPage() {
       // so the number isn't a meaningless hardcoded stub. Skipped entirely in standalone
       // mode (no `session`), same as calculator's own precedent.
       if (session) {
-        const approved = await confirmCharge(
-          estimateChatCredits(message),
-          `chat: "${message.slice(0, 40)}"`,
-          undefined,
-          'llm',
-        );
+        const { approved } = await confirmCharge({ credits: estimateChatCredits(message), reason: `chat: "${message.slice(0, 40)}"`, kind: 'llm' });
         if (!approved) {
           setChatError(
             'Charge declined, timed out, or the dashboard is not listening — check the console for details.',
@@ -107,12 +74,9 @@ export default function LlmPage() {
 
       // Always the same endpoint -- /api/chat decides Mythos-billed vs. standalone by
       // whether the request carries a Mythos session. The client does not choose a mode.
-      const res = await fetch('/api/chat', {
+      const res = await mythosFetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { 'X-Mythos-Session': sessionToken } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
       });
       const body = await res.json();
@@ -190,7 +154,7 @@ export default function LlmPage() {
     );
   }
 
-  if (!session && sessionError === 'standalone') {
+  if (status === 'standalone') {
     if (!isStandaloneLoggedIn) {
       return (
         <>
@@ -289,15 +253,19 @@ export default function LlmPage() {
     );
   }
 
-  if (sessionError) {
+  if (status === 'expired') {
+    return <main className="shell llmShell"><p className="errorText">Session expired.</p><button className="btn btnPrimary" onClick={relaunch}>Relaunch from Mythos</button></main>;
+  }
+
+  if (status === 'error') {
     return (
       <main className="shell llmShell">
-        <p className="errorText">Session error: {sessionError}</p>
+        <p className="errorText">Session error: {error?.message}</p>
       </main>
     );
   }
 
-  if (!session) {
+  if (status === 'loading' || !session) {
     return (
       <main className="shell llmShell">
         <p className="helperText">Verifying session…</p>
