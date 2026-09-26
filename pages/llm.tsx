@@ -40,6 +40,15 @@ export default function LlmPage() {
   } | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // UI toggle: stream the reply token-by-token, or wait for the single JSON response.
+  // Non-streaming is the only mode that receives the settled Mythos billing numbers.
+  const [streamingEnabled, setStreamingEnabled] = useState(true);
+  const chatLogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Keep the newest streamed tokens in view while the assistant reply grows.
+    chatLogRef.current?.scrollTo({ top: chatLogRef.current.scrollHeight });
+  }, [messages]);
 
   useEffect(() => {
     // router.isReady guards against Next's Pages Router not having parsed the query
@@ -104,41 +113,178 @@ export default function LlmPage() {
         }
       }
 
-      setMessages((prev) => [...prev, { role: 'user', content: message }]);
+      // Optimistic placeholder: the assistant bubble starts empty and is filled either
+      // token-by-token (streaming) or all at once when the JSON reply lands.
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: message },
+        { role: 'assistant', content: '' },
+      ]);
       setInput('');
 
       // Always the same endpoint -- /api/chat decides Mythos-billed vs. standalone by
       // whether the session cookie is present, the same way /api/calculate always just
-      // takes `lt`. The client never needs to know or choose which mode it's in.
+      // takes `lt`. The client never needs to know or choose which mode it's in; the
+      // `stream` flag only selects the response wire format.
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, stream: streamingEnabled }),
       });
-      const body = await res.json();
-      if (!body.success) {
-        setChatError(body.error);
-        return;
+
+      if (streamingEnabled) {
+        await consumeStream(res);
+      } else {
+        await consumeJson(res);
       }
-      setMessages((prev) => [...prev, { role: 'assistant', content: body.data.reply ?? '' }]);
-      if (typeof body.data.creditsCharged === 'number') {
-        setCreditsChargedTotal((prev) => prev + body.data.creditsCharged);
-        setLastCost({
-          credits: body.data.creditsCharged,
-          microunits: body.data.mythosCostMicrounits ?? null,
-          source: body.data.mythosPricingSource ?? null,
-          status: body.data.billingStatus ?? null,
-        });
-      }
+
+      // A reply that never produced any content (empty stream, empty completion) should not
+      // leave an empty bubble behind.
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant' && last.content === '') return prev.slice(0, -1);
+        return prev;
+      });
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : String(err));
+      // Drop the assistant bubble we optimistically created if it never received content.
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant' && last.content === '') return prev.slice(0, -1);
+        return prev;
+      });
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  async function readErrorMessage(res: Response): Promise<string> {
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) return body.error;
+    } catch {
+      // Response body wasn't JSON -- keep the generic message.
+    }
+    return 'Chat request failed';
+  }
+
+  // Streaming mode: consume OpenAI-compatible SSE frames and append each `delta` to the
+  // in-flight assistant bubble.
+  async function consumeStream(res: Response): Promise<void> {
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!res.ok || !contentType.includes('text/event-stream') || !res.body) {
+      // Pre-stream failure (bad request, insufficient funds, misconfigured server, ...):
+      // /api/chat answers those with a JSON envelope even in streaming mode.
+      setChatError(await readErrorMessage(res));
+      return;
+    }
+
+    const appendDelta = (text: string) => {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (!last || last.role !== 'assistant') return prev;
+        const next = [...prev];
+        next[next.length - 1] = { ...last, content: last.content + text };
+        return next;
+      });
+    };
+
+    const handleEvent = (data: string) => {
+      if (data === '[DONE]') return;
+      let event: unknown;
+      try {
+        event = JSON.parse(data);
+      } catch {
+        return; // Ignore keep-alives / unparseable frames.
+      }
+      if (typeof event !== 'object' || event === null) return;
+      const record = event as Record<string, unknown>;
+
+      if (record['type'] === 'delta' && typeof record['content'] === 'string') {
+        appendDelta(record['content']);
+      } else if (record['type'] === 'billing') {
+        applyBilling(record);
+      } else if (record['type'] === 'error' && typeof record['error'] === 'string') {
+        setChatError(record['error']);
+      }
+    };
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const drainBuffer = () => {
+      // SSE frames are separated by a blank line. Only whole frames can be parsed --
+      // anything after the last separator stays buffered for the next read.
+      let separator = buffer.indexOf('\n\n');
+      while (separator !== -1) {
+        const frame = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('data:')) handleEvent(line.slice(5).trimStart());
+        }
+        separator = buffer.indexOf('\n\n');
+      }
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      drainBuffer();
+    }
+    buffer += decoder.decode();
+    drainBuffer();
+  }
+
+  // Non-streaming mode: a single JSON reply -- the only mode that carries the settled Mythos
+  // billing numbers back to the client.
+  async function consumeJson(res: Response): Promise<void> {
+    if (!res.ok) {
+      setChatError(await readErrorMessage(res));
+      return;
+    }
+    const body = await res.json();
+    if (!body.success) {
+      setChatError(body.error);
+      return;
+    }
+    const reply: string = body.data.reply ?? '';
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (!last || last.role !== 'assistant') return prev;
+      const next = [...prev];
+      next[next.length - 1] = { ...last, content: reply };
+      return next;
+    });
+    if (typeof body.data.creditsCharged === 'number') {
+      setCreditsChargedTotal((prev) => prev + body.data.creditsCharged);
+      setLastCost({
+        credits: body.data.creditsCharged,
+        microunits: body.data.mythosCostMicrounits ?? null,
+        source: body.data.mythosPricingSource ?? null,
+        status: body.data.billingStatus ?? null,
+      });
+    }
+  }
+
+  function applyBilling(event: Record<string, unknown>) {
+    const credits = typeof event['creditsCharged'] === 'number' ? event['creditsCharged'] : null;
+    if (credits !== null) {
+      setCreditsChargedTotal((prev) => prev + credits);
+    }
+    setLastCost({
+      credits,
+      microunits: typeof event['mythosCostMicrounits'] === 'string' ? event['mythosCostMicrounits'] : null,
+      source: typeof event['mythosPricingSource'] === 'string' ? event['mythosPricingSource'] : null,
+      status: typeof event['billingStatus'] === 'string' ? event['billingStatus'] : null,
+    });
+  }
+
   function renderChatPanel() {
     return (
       <>
-        <div className="chatLog">
+        <div className="chatLog" ref={chatLogRef}>
           {messages.length === 0 ? (
             <p className="chatEmpty">No messages yet.</p>
           ) : (
@@ -148,10 +294,28 @@ export default function LlmPage() {
                 className={`chatBubble ${message.role === 'user' ? 'chatBubbleUser' : 'chatBubbleAssistant'}`}
               >
                 {message.content}
+                {message.role === 'assistant' && isSubmitting && index === messages.length - 1 && (
+                  <span className="chatCursor" aria-hidden="true" />
+                )}
               </div>
             ))
           )}
         </div>
+
+        <label className="chatToggle">
+          <input
+            type="checkbox"
+            checked={streamingEnabled}
+            onChange={(e) => setStreamingEnabled(e.target.checked)}
+            disabled={isSubmitting}
+          />
+          <span>Stream response</span>
+        </label>
+        <p className="chatToggleHint">
+          {streamingEnabled
+            ? 'Tokens arrive live; settled billing numbers are not included in a stream.'
+            : 'Reply arrives all at once, with settled billing numbers.'}
+        </p>
 
         <div className="chatInputRow">
           <input
