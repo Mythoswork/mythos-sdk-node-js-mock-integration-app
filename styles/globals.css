@@ -302,6 +302,24 @@ select {
   color: var(--fg);
 }
 
+/* Blinking caret shown while the assistant bubble is still being streamed. */
+.chatCursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.5;
+  animation: chatCursorBlink 1s steps(1) infinite;
+}
+
+@keyframes chatCursorBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
 .chatInputRow {
   display: flex;
   gap: 0.5rem;
@@ -310,6 +328,32 @@ select {
 
 .chatInputRow .input {
   flex: 1;
+}
+
+.chatToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.chatToggle input {
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.chatToggle input:disabled {
+  cursor: not-allowed;
+}
+
+.chatToggleHint {
+  margin-top: 0.3rem;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
 }
 
 /* ---------- Ledger strip ---------- */
