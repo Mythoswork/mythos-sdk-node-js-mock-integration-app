@@ -125,6 +125,31 @@ The SDK sends the provider key and session identity to Mythos. The gateway obser
 usage, settles the charge, and returns billing metadata. This mockup stores the identity-bearing
 session in an encrypted HttpOnly cookie; the browser receives only public session fields.
 
+Streaming works the same way — pass `stream: true` and consume the async iterable, exactly like
+the official OpenAI client:
+
+```ts
+const stream = await client.chat.completions.create({
+  model: 'openai/gpt-4o-mini',
+  messages: [{ role: 'user', content: message }],
+  stream: true,
+});
+for await (const chunk of stream) {
+  const delta = chunk.choices[0]?.delta?.content;
+  if (delta) process.stdout.write(delta);
+}
+```
+
+The gateway forces `stream_options.include_usage` on server-side and settles the charge when the
+stream ends. Note that the Mythos billing metadata (`mythos_charge_credits`,
+`mythos_cost_microunits`, …) is only attached to the **non-streaming** JSON response — it is not
+injected into the SSE frames. `getLlmBillingMetadata(chunk)` therefore returns `null` for
+streaming calls today; the charge is still settled, the client just can't read the settled
+numbers off the stream. `pages/api/chat.ts` relays the tokens to the browser as its own SSE
+frames and forwards a billing frame only if one ever appears. The LLM page exposes a **Stream
+response** toggle: on, `/api/chat` answers with SSE; off, it answers with the single JSON reply
+(the only mode that populates the settled billing numbers in the ledger).
+
 ---
 
 ## 6. Bypass your own auth/paywall when `lt` is present
