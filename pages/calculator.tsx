@@ -1,16 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
+import { useMythos } from '@mythos-work/sdk/react';
 import { CREDITS_PER_CALCULATION } from '@/lib/pricing';
-
-interface MythosSession {
-  userId: string;
-  email: string;
-  displayName: string;
-  listingId: string;
-  sessionJti: string;
-}
 
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
 
@@ -26,10 +18,7 @@ const STANDALONE_USERNAME = 'demo';
 const STANDALONE_PASSWORD = 'demo';
 
 export default function Calculator() {
-  const verifyStarted = useRef(false);
-  const [session, setSession] = useState<MythosSession | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
+  const { status, session, error, fetch: mythosFetch, confirmCharge, relaunch } = useMythos();
 
   // Standalone (non-Mythos) gate state.
   const [standaloneUsername, setStandaloneUsername] = useState('');
@@ -47,30 +36,6 @@ export default function Calculator() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (verifyStarted.current) return;
-    verifyStarted.current = true;
-    const savedSessionToken = window.sessionStorage.getItem('mythosSessionToken');
-    fetch(`/api/mythos/session${window.location.search}`, {
-      headers: savedSessionToken ? { 'X-Mythos-Session': savedSessionToken } : {},
-    })
-      .then((res) => res.json())
-      .then((body) => {
-        if (body.success && body.data) {
-          setSession(body.data.session);
-          setSessionToken(body.data.sessionToken);
-          window.sessionStorage.setItem('mythosSessionToken', body.data.sessionToken);
-          sendHandshake();
-        } else if (body.success && body.data === null) {
-          window.sessionStorage.removeItem('mythosSessionToken');
-          setSessionError('standalone');
-        } else {
-          setSessionError(body.error ?? 'Session verification failed');
-        }
-      })
-      .catch((err) => setSessionError(String(err)));
-  }, []);
-
   async function handleCalculate() {
     if (!session) return;
     setCalcError(null);
@@ -78,7 +43,7 @@ export default function Calculator() {
 
     try {
       setPendingLabel('Waiting for confirmation…');
-      const approved = await confirmCharge(CREDITS_PER_CALCULATION, `${operation}(${a}, ${b})`);
+      const { approved } = await confirmCharge({ credits: CREDITS_PER_CALCULATION, reason: `${operation}(${a}, ${b})` });
       if (!approved) {
         setCalcError(
           'Charge declined, timed out, or the dashboard is not listening — check the console for details.',
@@ -87,12 +52,9 @@ export default function Calculator() {
       }
 
       setPendingLabel('Calculating…');
-      const res = await fetch('/api/calculate', {
+      const res = await mythosFetch('/api/calculate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { 'X-Mythos-Session': sessionToken } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ operation, a, b }),
       });
       const body = await res.json();
@@ -172,7 +134,7 @@ export default function Calculator() {
     );
   }
 
-  if (!session && sessionError === 'standalone') {
+  if (status === 'standalone') {
     if (!isStandaloneLoggedIn) {
       return (
         <>
@@ -276,15 +238,19 @@ export default function Calculator() {
     );
   }
 
-  if (sessionError) {
+  if (status === 'expired') {
+    return <main className="shell"><p className="errorText">Session expired.</p><button className="btn btnPrimary" onClick={relaunch}>Relaunch from Mythos</button></main>;
+  }
+
+  if (status === 'error') {
     return (
       <main className="shell">
-        <p className="errorText">Session error: {sessionError}</p>
+        <p className="errorText">Session error: {error?.message}</p>
       </main>
     );
   }
 
-  if (!session) {
+  if (status === 'loading' || !session) {
     return (
       <main className="shell">
         <p className="helperText">Verifying session…</p>

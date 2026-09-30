@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import type { MythosSession } from '@mythos-work/sdk';
-import { confirmCharge, sendHandshake } from '@mythos-work/sdk/client';
-import { estimateChatCredits } from '@/lib/pricing';
+import { useMythos } from '@mythos-work/sdk/react';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -15,10 +13,7 @@ const STANDALONE_USERNAME = 'demo';
 const STANDALONE_PASSWORD = 'demo';
 
 export default function LlmPage() {
-  const verifyStarted = useRef(false);
-  const [session, setSession] = useState<MythosSession | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
+  const { status, session, error, fetch: mythosFetch, confirmCharge, relaunch } = useMythos();
 
   // Standalone (non-Mythos) gate state — only relevant when there's no Mythos session at all.
   const [standaloneUsername, setStandaloneUsername] = useState('');
@@ -48,30 +43,6 @@ export default function LlmPage() {
     chatLogRef.current?.scrollTo({ top: chatLogRef.current.scrollHeight });
   }, [messages]);
 
-  useEffect(() => {
-    if (verifyStarted.current) return;
-    verifyStarted.current = true;
-    const savedSessionToken = window.sessionStorage.getItem('mythosSessionToken');
-    fetch(`/api/mythos/session${window.location.search}`, {
-      headers: savedSessionToken ? { 'X-Mythos-Session': savedSessionToken } : {},
-    })
-      .then((res) => res.json())
-      .then((body) => {
-        if (body.success && body.data) {
-          setSession(body.data.session);
-          setSessionToken(body.data.sessionToken);
-          window.sessionStorage.setItem('mythosSessionToken', body.data.sessionToken);
-          sendHandshake();
-        } else if (body.success && body.data === null) {
-          window.sessionStorage.removeItem('mythosSessionToken');
-          setSessionError('standalone');
-        } else {
-          setSessionError(body.error ?? 'Session verification failed');
-        }
-      })
-      .catch((err) => setSessionError(String(err)));
-  }, []);
-
   function handleStandaloneLogin() {
     setStandaloneLoginError(null);
     if (standaloneUsername === STANDALONE_USERNAME && standalonePassword === STANDALONE_PASSWORD) {
@@ -90,19 +61,12 @@ export default function LlmPage() {
 
     try {
       // Same confirm-charge modal calculator.tsx already uses, before any Mythos-billed
-      // action. The credits number here is a rough, message-length-based reminder, not a
-      // projection of the real LLM cost (that's only known after the provider responds,
-      // and is already billed automatically by /api/chat via the SDK's wallet hold) -- it
-      // exists purely so the Consumer intentionally confirms before spending anything, and
-      // so the number isn't a meaningless hardcoded stub. Skipped entirely in standalone
-      // mode (no `session`), same as calculator's own precedent.
+      // action. LLM cost is usage-based (known only after the provider responds, and billed
+      // automatically by /api/chat via the gateway's wallet hold), so the LLM variant shows
+      // no credit amount -- it exists so the Consumer intentionally confirms before spending.
+      // Skipped entirely in standalone mode (no `session`), same as calculator's precedent.
       if (session) {
-        const approved = await confirmCharge(
-          estimateChatCredits(message),
-          `chat: "${message.slice(0, 40)}"`,
-          undefined,
-          'llm',
-        );
+        const { approved } = await confirmCharge({ kind: 'llm', reason: `chat: "${message.slice(0, 40)}"` });
         if (!approved) {
           setChatError(
             'Charge declined, timed out, or the dashboard is not listening — check the console for details.',
@@ -123,7 +87,7 @@ export default function LlmPage() {
       // Always the same endpoint -- /api/chat decides Mythos-billed vs. standalone by
       // whether the request carries a Mythos session. The client does not choose a mode;
       // the `stream` flag only selects the response wire format.
-      const res = await fetch('/api/chat', {
+      const res = await mythosFetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -352,7 +316,7 @@ export default function LlmPage() {
     );
   }
 
-  if (!session && sessionError === 'standalone') {
+  if (status === 'standalone') {
     if (!isStandaloneLoggedIn) {
       return (
         <>
@@ -451,15 +415,19 @@ export default function LlmPage() {
     );
   }
 
-  if (sessionError) {
+  if (status === 'expired') {
+    return <main className="shell llmShell"><p className="errorText">Session expired.</p><button className="btn btnPrimary" onClick={relaunch}>Relaunch from Mythos</button></main>;
+  }
+
+  if (status === 'error') {
     return (
       <main className="shell llmShell">
-        <p className="errorText">Session error: {sessionError}</p>
+        <p className="errorText">Session error: {error?.message}</p>
       </main>
     );
   }
 
-  if (!session) {
+  if (status === 'loading' || !session) {
     return (
       <main className="shell llmShell">
         <p className="helperText">Verifying session…</p>
