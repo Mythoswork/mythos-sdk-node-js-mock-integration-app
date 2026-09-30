@@ -10,11 +10,11 @@ const nextConfig: NextConfig = {
     return [
       {
         source: '/.well-known/mythos-handshake',
-        destination: '/api/well-known/mythos-handshake',
+        destination: '/api/mythos/handshake',
       },
       {
         source: '/.well-known/mythos-listing-registered',
-        destination: '/api/well-known/mythos-listing-registered',
+        destination: '/api/mythos/listing-registered',
       },
     ];
   },

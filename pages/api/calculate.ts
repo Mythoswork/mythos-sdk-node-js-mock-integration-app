@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { verifyLaunchToken, reportUsage, InsufficientFundsError, SessionNotFoundError } from '@mythos-work/sdk';
-import { getListingIds } from '../../lib/listing-ids-store';
+import { MythosError } from '@mythos-work/sdk';
+
+import { logMythosError } from '../../lib/logger';
+import { mythos } from '../../lib/mythos';
 import { CREDITS_PER_CALCULATION } from '../../lib/pricing';
 
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
@@ -24,10 +26,11 @@ export default async function calculate(req: NextApiRequest, res: NextApiRespons
     return;
   }
 
-  const { lt, operation, a, b } = req.body as { lt?: string; operation?: Operation; a?: number; b?: number };
+  const body = req.body as { operation?: Operation; a?: number; b?: number };
+  const { operation, a, b } = body;
 
-  if (!lt || !operation || typeof a !== 'number' || typeof b !== 'number') {
-    res.status(400).json({ success: false, error: 'Missing lt, operation, a, or b' });
+  if (!operation || typeof a !== 'number' || typeof b !== 'number') {
+    res.status(400).json({ success: false, error: 'Missing operation, a, or b' });
     return;
   }
 
@@ -37,20 +40,15 @@ export default async function calculate(req: NextApiRequest, res: NextApiRespons
   }
 
   try {
-    const session = await verifyLaunchToken(lt, { resolveListingIds: getListingIds });
     const result = compute(operation, a, b);
-    await reportUsage(session.sessionJti, { credits: CREDITS_PER_CALCULATION, reason: `calculator:${operation}` });
+    await mythos.charge(req, { credits: CREDITS_PER_CALCULATION, reason: `calculator:${operation}` });
     res.status(200).json({ success: true, data: { result, creditsCharged: CREDITS_PER_CALCULATION } });
   } catch (err: unknown) {
-    if (err instanceof InsufficientFundsError) {
-      res.status(402).json({ success: false, error: 'Insufficient funds' });
+    if (err instanceof MythosError) {
+      res.status(err.httpStatus).json({ success: false, error: err.message, code: err.code });
       return;
     }
-    if (err instanceof SessionNotFoundError) {
-      res.status(404).json({ success: false, error: 'Session not found' });
-      return;
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(401).json({ success: false, error: message });
+    logMythosError('calculate: unexpected server error', err);
+    throw err;
   }
 }

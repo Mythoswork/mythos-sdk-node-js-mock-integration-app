@@ -1,15 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
-import {
-  decodeSession,
-  InsufficientFundsError,
-  InvalidLaunchTokenError,
-  MythosError,
-  SessionNotFoundError,
-} from '@mythos-work/sdk';
-import { getLlmBillingMetadata, llm } from '@mythos-work/sdk/llm';
+import { MythosError } from '@mythos-work/sdk';
 
-import { SESSION_COOKIE_NAME } from '../../lib/session-cookie';
+import { logMythosError } from '../../lib/logger';
+import { mythos } from '../../lib/mythos';
 
 const PRODUCER_OPENAI_API_KEY = process.env.PRODUCER_OPENAI_API_KEY;
 const MODEL_ID = process.env.ALPHA_MODEL_ID ?? 'openai/gpt-4o-mini';
@@ -23,50 +17,124 @@ interface BillingPayload {
   billingStatus: string | null;
 }
 
+interface HttpError {
+  status: number;
+  error: string;
+  code?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// Maps a thrown error to the HTTP status + message the client should see. Used only for
-// failures raised *before* any SSE frame has been written -- once headers are on the wire a
-// JSON error envelope is no longer possible, so the stream emits an `error` frame instead.
-function toHttpError(err: unknown): { status: number; error: string } {
-  if (err instanceof InsufficientFundsError) {
-    return { status: 402, error: 'Insufficient funds' };
-  }
-  if (err instanceof SessionNotFoundError) {
-    return { status: 404, error: 'Session not found' };
-  }
-  if (err instanceof InvalidLaunchTokenError) {
-    return { status: 401, error: 'Invalid launch token' };
-  }
+// Maps a thrown error to the status + message the browser should see. Used as a JSON envelope
+// before any SSE frame is written, and as an `error` frame once the stream has started.
+function toHttpError(err: unknown): HttpError {
   if (err instanceof MythosError) {
-    return { status: 500, error: 'Chat service is misconfigured' };
+    if (err.httpStatus >= 500) logMythosError(`chat: SDK request failed (${err.code})`, err);
+    return { status: err.httpStatus, error: err.message, code: err.code };
   }
-  // The Mythos gateway returns an OpenAI-shaped error envelope, which the OpenAI client
-  // surfaces as an APIError carrying the upstream status (402/404/401 map to the same
-  // conditions the SDK error types above cover).
+  // The Mythos gateway answers with an OpenAI-shaped error envelope, which the OpenAI client
+  // surfaces as an APIError carrying the upstream status.
   if (err instanceof OpenAI.APIError) {
-    if (err.status === 402) return { status: 402, error: 'Insufficient funds' };
-    if (err.status === 404) return { status: 404, error: 'Session not found' };
-    if (err.status === 401) return { status: 401, error: 'Invalid launch token' };
+    if (err.status === 402) return { status: 402, error: 'Insufficient credits', code: 'INSUFFICIENT_FUNDS' };
+    if (err.status === 401) return { status: 401, error: 'Mythos session expired', code: 'SESSION_EXPIRED' };
   }
+  logMythosError('chat: upstream request failed', err);
   return { status: 502, error: 'Chat request failed' };
+}
+
+function sendError(res: NextApiResponse, err: unknown): void {
+  const { status, error, code } = toHttpError(err);
+  res.status(status).json({ success: false, error, ...(code ? { code } : {}) });
 }
 
 function writeEvent(res: NextApiResponse, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function extractBilling(chunk: unknown): BillingPayload | null {
-  const billing = getLlmBillingMetadata(chunk);
+function toBillingPayload(response: unknown): BillingPayload | null {
+  const billing = mythos.billing(response);
   if (!billing) return null;
   return {
     creditsCharged: billing.mythos_charge_credits ?? null,
-    mythosCostMicrounits: billing.mythos_cost_microunits,
-    mythosPricingSource: billing.mythos_pricing_source,
+    mythosCostMicrounits: billing.mythos_cost_microunits ?? null,
+    mythosPricingSource: billing.mythos_pricing_source ?? null,
     billingStatus: billing.mythos_billing_status ?? null,
   };
+}
+
+async function replyJson(
+  res: NextApiResponse,
+  client: OpenAI,
+  model: string,
+  message: string,
+  isMythos: boolean,
+  signal: AbortSignal,
+): Promise<void> {
+  const completion = await client.chat.completions.create(
+    { model, messages: [{ role: 'user', content: message }], stream: false },
+    { signal },
+  );
+  const billing = isMythos ? toBillingPayload(completion) : null;
+  res.status(200).json({
+    success: true,
+    data: {
+      reply: completion.choices[0]?.message.content ?? null,
+      creditsCharged: billing?.creditsCharged ?? null,
+      mythosCostMicrounits: billing?.mythosCostMicrounits ?? null,
+      mythosPricingSource: billing?.mythosPricingSource ?? null,
+      billingStatus: billing?.billingStatus ?? null,
+    },
+  });
+}
+
+// Relays the provider stream to the browser as this app's own SSE frames:
+// `data: {"type":"delta","content":"..."}`, an optional `data: {"type":"billing",...}` frame,
+// then `data: [DONE]`. The Mythos gateway settles streamed calls server-side and does not put
+// billing metadata on SSE chunks, so the billing frame normally never appears -- it is
+// forwarded only if a chunk ever carries it.
+async function relayStream(
+  res: NextApiResponse,
+  stream: AsyncIterable<unknown>,
+  isMythos: boolean,
+  signal: AbortSignal,
+): Promise<void> {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+
+  let billing: BillingPayload | null = null;
+  try {
+    for await (const chunk of stream) {
+      if (isMythos) billing = toBillingPayload(chunk) ?? billing;
+
+      const choices = isRecord(chunk) ? chunk['choices'] : undefined;
+      if (!Array.isArray(choices) || choices.length === 0) continue;
+      const delta = isRecord(choices[0]) ? choices[0]['delta'] : undefined;
+      const content = isRecord(delta) ? delta['content'] : undefined;
+      if (typeof content === 'string' && content.length > 0) writeEvent(res, { type: 'delta', content });
+    }
+    if (billing) writeEvent(res, { type: 'billing', ...billing });
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } catch (err: unknown) {
+    // Browser disconnected: the socket is gone and the gateway has already parked the
+    // request for reconciliation, so there is nothing left to write.
+    if (signal.aborted) return;
+    // Headers are on the wire, so a JSON envelope is no longer possible -- send an error frame.
+    const { error, code } = toHttpError(err);
+    try {
+      writeEvent(res, { type: 'error', error, ...(code ? { code } : {}) });
+    } catch {
+      // Socket already closed.
+    }
+    if (!res.writableEnded) res.end();
+  }
 }
 
 export default async function chat(req: NextApiRequest, res: NextApiResponse): Promise<void> {
@@ -77,8 +145,8 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
 
   const body = isRecord(req.body) ? req.body : {};
   const message = typeof body['message'] === 'string' ? body['message'].trim() : '';
-  // The UI toggle decides which wire format it wants. Absent/false keeps the original
-  // single-JSON-response contract; true switches to OpenAI-style SSE.
+  // The UI toggle picks the wire format: absent/false keeps the single-JSON contract, true
+  // switches to SSE.
   const streaming = body['stream'] === true;
 
   if (!message) {
@@ -86,147 +154,47 @@ export default async function chat(req: NextApiRequest, res: NextApiResponse): P
     return;
   }
   if (!PRODUCER_OPENAI_API_KEY) {
+    logMythosError('chat: PRODUCER_OPENAI_API_KEY is not set', new Error('Missing provider API key'));
     res.status(500).json({ success: false, error: 'Server misconfigured: PRODUCER_OPENAI_API_KEY not set' });
     return;
   }
 
-  // One endpoint either way, same as /api/calculate: with a Mythos session (from the
-  // cookie /api/verify-session set), llm()'s returned client is routed through the Mythos
-  // gateway and billed. Without one -- this app's own standalone demo mode -- llm()'s
-  // fallback returns a plain OpenAI client instead. Only the model id and billing
-  // metadata differ; the client never needs to know or choose which mode it's in.
-  const cookieValue = req.cookies[SESSION_COOKIE_NAME];
-
-  // Abort the upstream provider call if the browser disconnects mid-request, so the gateway
-  // can stop paying for tokens nobody will read. `close` also fires on normal completion, so
-  // only abort when the response has not already ended.
+  // Abort the upstream call if the browser disconnects, so nobody pays for tokens no one reads.
+  // `close` also fires on normal completion, so only abort while the response is unfinished.
   const controller = new AbortController();
   res.on('close', () => {
     if (!res.writableEnded) controller.abort();
   });
 
-  let client: OpenAI;
-  let model: string;
-  let isStandalone: boolean;
   try {
-    const session = cookieValue ? decodeSession(cookieValue) : null;
-    isStandalone = !session;
-    model = isStandalone ? STANDALONE_MODEL_ID : MODEL_ID;
-    client = llm<OpenAI>(session, {
+    // Same endpoint for both modes: with a Mythos session the SDK returns the gateway client
+    // (billed to the Consumer's credits); without one it returns the standalone fallback.
+    const session = await mythos.getSession(req);
+    const client = await mythos.llm<OpenAI>(req, {
       apiKey: PRODUCER_OPENAI_API_KEY,
       fallback: new OpenAI({ apiKey: PRODUCER_OPENAI_API_KEY, baseURL: STANDALONE_BASE_URL }),
     });
-  } catch (err: unknown) {
-    if (controller.signal.aborted) return;
-    const { status, error } = toHttpError(err);
-    res.status(status).json({ success: false, error });
-    return;
-  }
+    const isMythos = session !== null;
+    const model = isMythos ? MODEL_ID : STANDALONE_MODEL_ID;
 
-  if (!streaming) {
-    // Non-streaming: a single JSON reply. This is the only mode that can read the Mythos
-    // billing metadata back off the response.
-    try {
-      const completion = await client.chat.completions.create(
-        {
-          model,
-          messages: [{ role: 'user', content: message }],
-          stream: false,
-        },
-        { signal: controller.signal },
-      );
-      const billing = isStandalone ? null : getLlmBillingMetadata(completion);
-
-      res.status(200).json({
-        success: true,
-        data: {
-          reply: completion.choices[0]?.message.content ?? null,
-          creditsCharged: billing?.mythos_charge_credits ?? null,
-          mythosCostMicrounits: billing?.mythos_cost_microunits ?? null,
-          mythosPricingSource: billing?.mythos_pricing_source ?? null,
-          billingStatus: billing?.mythos_billing_status ?? null,
-        },
-      });
-    } catch (err: unknown) {
-      if (controller.signal.aborted) return;
-      const { status, error } = toHttpError(err);
-      res.status(status).json({ success: false, error });
+    if (!streaming) {
+      await replyJson(res, client, model, message, isMythos, controller.signal);
+      return;
     }
-    return;
-  }
 
-  let stream: AsyncIterable<unknown>;
-  try {
-    stream = await client.chat.completions.create(
+    const stream = await client.chat.completions.create(
       {
         model,
         messages: [{ role: 'user', content: message }],
         stream: true,
-        // Ask the provider for a final usage frame. The Mythos gateway forces this on
-        // server-side anyway; setting it explicitly keeps the standalone OpenRouter path
-        // consistent, and a streaming caller that never reads usage simply ignores it.
+        // The Mythos gateway forces this server-side; set it so the standalone path matches.
         stream_options: { include_usage: true },
       },
       { signal: controller.signal },
     );
+    await relayStream(res, stream, isMythos, controller.signal);
   } catch (err: unknown) {
-    // Browser disconnected before the stream opened -- the socket is gone, so there is
-    // nothing to answer with.
-    if (controller.signal.aborted) return;
-    // Nothing has been written yet -- a normal JSON error is still possible.
-    const { status, error } = toHttpError(err);
-    res.status(status).json({ success: false, error });
-    return;
-  }
-
-  // OpenAI-compatible SSE frames, so the same wire format the gateway itself emits is what
-  // the browser reads: `data: {"type":"delta","content":"..."}`, an optional
-  // `data: {"type":"billing",...}` frame, then `data: [DONE]`.
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  res.flushHeaders?.();
-
-  let billing: BillingPayload | null = null;
-
-  try {
-    for await (const chunk of stream) {
-      // Future-proofing: if the gateway ever attaches Mythos billing metadata to a stream
-      // frame, forward it so the client's ledger still updates. Today's gateway only bills
-      // streaming calls server-side (see litellm-gateway.service.ts recordStreamingChatUsage)
-      // and leaves the SSE frames provider-shaped, so this normally stays null.
-      const chunkBilling = extractBilling(chunk);
-      if (chunkBilling) billing = chunkBilling;
-
-      const choices = isRecord(chunk) ? chunk['choices'] : undefined;
-      if (!Array.isArray(choices) || choices.length === 0) continue;
-
-      const delta = isRecord(choices[0]) ? choices[0]['delta'] : undefined;
-      const content = isRecord(delta) ? delta['content'] : undefined;
-      if (typeof content === 'string' && content.length > 0) {
-        writeEvent(res, { type: 'delta', content });
-      }
-    }
-
-    if (billing) writeEvent(res, { type: 'billing', ...billing });
-    res.write('data: [DONE]\n\n');
-    res.end();
-  } catch (err: unknown) {
-    // Client aborted: the connection is already gone and the gateway has moved its ledger
-    // row to usage_pending, so there is nothing to write here.
-    if (controller.signal.aborted) return;
-
-    // Headers are already on the wire, so a JSON error envelope is no longer possible --
-    // close the SSE stream with an error frame the client can surface.
-    const { error } = toHttpError(err);
-    try {
-      writeEvent(res, { type: 'error', error });
-    } catch {
-      // Socket already closed -- nothing left to do.
-    }
-    if (!res.writableEnded) res.end();
+    if (controller.signal.aborted || res.headersSent) return;
+    sendError(res, err);
   }
 }
