@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-This repo pins `@mythos-work/sdk@0.2.0`. Use the packed SDK tarball for local validation until 0.2.0 is published.
+This repo pins `@mythos-work/sdk@0.5.0`. Use the packed SDK tarball for local validation until 0.5.0 is published.
 
 ---
 
@@ -200,9 +200,16 @@ MYTHOS_API_URL=<mythos-backend base URL, e.g. http://localhost:5001>
 CALCULATOR_BASE_URL=<your app's own public base URL, e.g. http://localhost:3001>
 MYTHOS_LISTING_ID=<written automatically by bootstrap.ts after registration>
 MYTHOS_SESSION_SECRET=<32+ random characters; generate with openssl rand -base64 32>
+MYTHOS_KEY=<your Producer account's current Mythos key>
 ```
 
+Copy `MYTHOS_KEY` from Mythos dashboard → Settings → Mythos key; it binds this app to your Producer account and is required from SDK 0.6.0.
+
 `createMythos()` validates the session secret, API URL and listing configuration when the SDK instance is created.
+
+### Troubleshooting
+
+`PRODUCER_MISMATCH`: the key belongs to another account or was regenerated. Copy the current key from your Producer account's Mythos dashboard → Settings → Mythos key and redeploy.
 
 ---
 
