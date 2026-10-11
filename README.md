@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-This repo pins `@mythos-work/sdk@0.5.0`. Use the packed SDK tarball for local validation until 0.5.0 is published.
+This repo pins `@mythos-work/sdk@0.5.0`.
 
 ---
 
