@@ -80,7 +80,7 @@ await mythos.charge(req, { usd: 0.15, reason: 'calculator:add' });
 - `reportUsage` charges credits from the user's wallet immediately — real money-equivalent movement, not a log entry.
 - Catch `InsufficientFundsError` → surface as HTTP 402 to your frontend, don't let it bubble as a generic 500.
 - Catch `SessionNotFoundError` → the `lt` expired (5 min from mint) or was never valid.
-- Charge whatever `usd` decimal string makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
+- Charge whatever `usd` amount (a number like `0.15` or a decimal string like `'0.15'`) makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
 
 ---
 
@@ -192,6 +192,8 @@ yourself.
 `POST /api/listings/web-app` (Mythos backend) with `{ title, description, category, launch_url, status, cover_image }`. `launch_url` must be `https://` with a real TLD in production (local dev backends may relax this — check with whoever runs your target `mythos-backend` instance).
 
 This repo's `scripts/bootstrap.ts` (`npm run bootstrap`) does this once: logs in as a test user, creates the listing pointed at `CALCULATOR_BASE_URL`, and writes the returned `listing_id` into `.env.local` as `MYTHOS_LISTING_ID`. Restart your dev server after running it — env vars are read at process start, not per-request.
+
+The listing is created as a draft. Before users can launch it, submit it through review from the Verify page in the Mythos dashboard.
 
 ---
 

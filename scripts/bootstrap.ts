@@ -20,7 +20,7 @@ async function main() {
     launch_url: `${config.calculatorBaseUrl}/calculator`,
     status: 'draft',
     cover_image: 'https://example.com/calculator-cover.png',
-    price_credits: 1,
+    price_credits: 1500, // Listing metadata only; calculation charges use USD.
     producer_margin_pct: 100,
   });
 

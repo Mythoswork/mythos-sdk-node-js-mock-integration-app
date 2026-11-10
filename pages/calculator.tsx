@@ -66,6 +66,10 @@ export default function Calculator() {
       if (typeof body.data.creditsCharged === 'number') {
         setCreditsChargedTotal((prev) => prev + body.data.creditsCharged);
       }
+    } catch (err) {
+      // e.g. USD_RATE_UNAVAILABLE (503) or INVALID_CHARGE_AMOUNT (400) from confirmCharge.
+      const { code, message } = (err ?? {}) as { code?: string; message?: string };
+      setCalcError(code ? `${code}: ${message}` : String(err));
     } finally {
       setIsSubmitting(false);
       setPendingLabel(null);
