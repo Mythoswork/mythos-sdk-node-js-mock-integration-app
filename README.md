@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-This repo pins `@mythos-work/sdk@0.5.0`.
+This repo pins `@mythos-work/sdk@0.6.0`.
 
 ---
 
@@ -207,7 +207,7 @@ MYTHOS_SESSION_SECRET=<32+ random characters; generate with openssl rand -base64
 MYTHOS_KEY=<your Producer account's current Mythos key>
 ```
 
-Copy `MYTHOS_KEY` from Mythos dashboard → Settings → Mythos key; it binds this app to your Producer account and is required from SDK 0.6.0.
+Copy `MYTHOS_KEY` from Mythos dashboard → Settings → Mythos key; it binds this app to your Producer account and will be required in a future SDK release (0.6.0 still only warns when it is unset).
 
 `createMythos()` validates the session secret, API URL and listing configuration when the SDK instance is created.
 
