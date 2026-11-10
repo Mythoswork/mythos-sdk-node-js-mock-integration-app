@@ -12,13 +12,13 @@ async function main() {
   console.log(`Logging in as ${config.testUserEmail} against ${config.mythosApiUrl}...`);
   const { token } = await login(config.mythosApiUrl, config.testUserEmail, config.testUserPassword);
 
-  console.log('Creating web-app listing (status: published)...');
+  console.log('Creating web-app listing (status: draft); submit it through review on the Verify page before it is live.');
   const listing = await createWebAppListing(config.mythosApiUrl, token, {
     title: 'Mythos Calculator Mockup',
     description: 'Calculator app exercising launch, handshake, consume, and metering.',
     category: 'Web Development',
     launch_url: `${config.calculatorBaseUrl}/calculator`,
-    status: 'published',
+    status: 'draft',
     cover_image: 'https://example.com/calculator-cover.png',
     price_credits: 1,
     producer_margin_pct: 100,

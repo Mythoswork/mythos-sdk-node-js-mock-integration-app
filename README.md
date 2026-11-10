@@ -74,13 +74,13 @@ const { status } = useMythos(); // handshake is automatic
 Call `mythos.charge()` with the server request. The SDK reads the cookie or `X-Mythos-Session` header and meters against the established session:
 
 ```ts
-await mythos.charge(req, { credits: 1, reason: 'calculator:add' });
+await mythos.charge(req, { usd: 0.15, reason: 'calculator:add' });
 ```
 
 - `reportUsage` charges credits from the user's wallet immediately — real money-equivalent movement, not a log entry.
 - Catch `InsufficientFundsError` → surface as HTTP 402 to your frontend, don't let it bubble as a generic 500.
 - Catch `SessionNotFoundError` → the `lt` expired (5 min from mint) or was never valid.
-- Charge whatever `credits` value makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
+- Charge whatever `usd` decimal string makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
 
 ---
 
@@ -156,9 +156,11 @@ These are two totally separate, non-linked identity systems. A user authenticate
 Before firing any billable action, ask the shared browser client to confirm the charge with the Mythos dashboard. The Consumer must explicitly approve every charge:
 
 ```ts
-const { approved } = await confirmCharge({ credits: 1, reason: `${operation}(${a}, ${b})` });
+const { approved } = await confirmCharge({ usd: 0.15, reason: `${operation}(${a}, ${b})` });
 if (!approved) return; // charge skipped — your metering endpoint is never called
 ```
+
+The popup shows credits, converted from USD using the session rate.
 
 Protocol (identical to the reference client's contract):
 
