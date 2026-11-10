@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useMythos } from '@mythos-work/sdk/react';
-import { CREDITS_PER_CALCULATION } from '@/lib/pricing';
+import { USD_PER_CALCULATION } from '@/lib/pricing';
 
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
 
@@ -43,7 +43,7 @@ export default function Calculator() {
 
     try {
       setPendingLabel('Waiting for confirmation…');
-      const { approved } = await confirmCharge({ credits: CREDITS_PER_CALCULATION, reason: `${operation}(${a}, ${b})` });
+      const { approved } = await confirmCharge({ usd: USD_PER_CALCULATION, reason: `${operation}(${a}, ${b})` });
       if (!approved) {
         setCalcError(
           'Charge declined, timed out, or the dashboard is not listening — check the console for details.',
@@ -63,7 +63,13 @@ export default function Calculator() {
         return;
       }
       setResult(body.data.result);
-      setCreditsChargedTotal((prev) => prev + body.data.creditsCharged);
+      if (typeof body.data.creditsCharged === 'number') {
+        setCreditsChargedTotal((prev) => prev + body.data.creditsCharged);
+      }
+    } catch (err) {
+      // e.g. USD_RATE_UNAVAILABLE (503) or INVALID_CHARGE_AMOUNT (400) from confirmCharge.
+      const { code, message } = (err ?? {}) as { code?: string; message?: string };
+      setCalcError(code ? `${code}: ${message}` : String(err));
     } finally {
       setIsSubmitting(false);
       setPendingLabel(null);
@@ -273,6 +279,7 @@ export default function Calculator() {
           <div className="identity">
             <h1>Welcome, {session.displayName}</h1>
             <p>{session.email}</p>
+            <p>${USD_PER_CALCULATION} per calculation</p>
           </div>
 
           <div className="readout">

@@ -3,7 +3,7 @@ import { MythosError } from '@mythos-work/sdk';
 
 import { logMythosError } from '../../lib/logger';
 import { mythos } from '../../lib/mythos';
-import { CREDITS_PER_CALCULATION } from '../../lib/pricing';
+import { USD_PER_CALCULATION } from '../../lib/pricing';
 
 type Operation = 'add' | 'subtract' | 'multiply' | 'divide';
 
@@ -41,8 +41,8 @@ export default async function calculate(req: NextApiRequest, res: NextApiRespons
 
   try {
     const result = compute(operation, a, b);
-    await mythos.charge(req, { credits: CREDITS_PER_CALCULATION, reason: `calculator:${operation}` });
-    res.status(200).json({ success: true, data: { result, creditsCharged: CREDITS_PER_CALCULATION } });
+    const meter = await mythos.charge(req, { usd: USD_PER_CALCULATION, reason: `calculator:${operation}` });
+    res.status(200).json({ success: true, data: { result, creditsCharged: meter.creditsCharged ?? null } });
   } catch (err: unknown) {
     if (err instanceof MythosError) {
       res.status(err.httpStatus).json({ success: false, error: err.message, code: err.code });

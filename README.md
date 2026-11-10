@@ -25,7 +25,7 @@ None of this requires you to know anything about Mythos users, passwords, or ses
 npm install @mythos-work/sdk
 ```
 
-This repo pins `@mythos-work/sdk@0.5.0`.
+This repo pins `@mythos-work/sdk@0.6.0`.
 
 ---
 
@@ -74,13 +74,13 @@ const { status } = useMythos(); // handshake is automatic
 Call `mythos.charge()` with the server request. The SDK reads the cookie or `X-Mythos-Session` header and meters against the established session:
 
 ```ts
-await mythos.charge(req, { credits: 1, reason: 'calculator:add' });
+await mythos.charge(req, { usd: 0.15, reason: 'calculator:add' });
 ```
 
 - `reportUsage` charges credits from the user's wallet immediately — real money-equivalent movement, not a log entry.
 - Catch `InsufficientFundsError` → surface as HTTP 402 to your frontend, don't let it bubble as a generic 500.
 - Catch `SessionNotFoundError` → the `lt` expired (5 min from mint) or was never valid.
-- Charge whatever `credits` value makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
+- Charge whatever `usd` amount (a number like `0.15` or a decimal string like `'0.15'`) makes sense per operation — the SDK doesn't enforce a fixed price, that's entirely up to you.
 
 ---
 
@@ -156,9 +156,11 @@ These are two totally separate, non-linked identity systems. A user authenticate
 Before firing any billable action, ask the shared browser client to confirm the charge with the Mythos dashboard. The Consumer must explicitly approve every charge:
 
 ```ts
-const { approved } = await confirmCharge({ credits: 1, reason: `${operation}(${a}, ${b})` });
+const { approved } = await confirmCharge({ usd: 0.15, reason: `${operation}(${a}, ${b})` });
 if (!approved) return; // charge skipped — your metering endpoint is never called
 ```
+
+The popup shows credits, converted from USD using the session rate.
 
 Protocol (identical to the reference client's contract):
 
@@ -191,6 +193,8 @@ yourself.
 
 This repo's `scripts/bootstrap.ts` (`npm run bootstrap`) does this once: logs in as a test user, creates the listing pointed at `CALCULATOR_BASE_URL`, and writes the returned `listing_id` into `.env.local` as `MYTHOS_LISTING_ID`. Restart your dev server after running it — env vars are read at process start, not per-request.
 
+The listing is created as a draft. Before users can launch it, submit it through review from the Verify page in the Mythos dashboard.
+
 ---
 
 ## Env vars your integration needs
@@ -203,7 +207,7 @@ MYTHOS_SESSION_SECRET=<32+ random characters; generate with openssl rand -base64
 MYTHOS_KEY=<your Producer account's current Mythos key>
 ```
 
-Copy `MYTHOS_KEY` from Mythos dashboard → Settings → Mythos key; it binds this app to your Producer account and is required from SDK 0.6.0.
+Copy `MYTHOS_KEY` from Mythos dashboard → Settings → Mythos key; it binds this app to your Producer account and will be required in a future SDK release (0.6.0 still only warns when it is unset).
 
 `createMythos()` validates the session secret, API URL and listing configuration when the SDK instance is created.
 
